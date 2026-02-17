@@ -421,11 +421,50 @@ class TargetEngine:
             cache_state.seq_len = new_seq_len
 
         # --- Step 6: Extract tree-position logits and verify ---
-        # The logits for the tree nodes are the LAST num_tree_nodes
-        # positions in the output.
+        # In a causal LM, logits at position t predict the token at position t+1.
+        # To verify draft token i correctly:
+        #   - For root nodes (parent == -1): compare against logits from position (prefix_length - 1)
+        #   - For child nodes: compare against logits from position (prefix_length + parent_index)
+        #
+        # TODO(correctness): When using KV cache, we only have tree node logits in the output,
+        # not the last prefix logit needed for root verification. Current implementation falls
+        # back to tree_logits[0] for cached roots, which may reduce accuracy. Consider either:
+        # (a) always feeding last prefix token along with tree, or
+        # (b) storing last prefix logit in cache state, or
+        # (c) doing a separate single-token forward pass for the last prefix token.
+        
         all_logits = outputs.logits  # [1, input_len, vocab_size]
-        tree_logits = all_logits[0, -num_tree_nodes:, :]
+        
+        # Build verification logits by gathering from parent positions
+        tree_logits = torch.zeros(
+            num_tree_nodes, all_logits.shape[-1], 
+            dtype=all_logits.dtype, 
+            device=self.device
+        )
         # Shape: [num_tree_nodes, vocab_size]
+        
+        for i in range(num_tree_nodes):
+            parent_idx = topology_map[i]
+            if parent_idx == -1:
+                # Root node: should use logits from last prefix position
+                if cache_hit and prefix_length > 0:
+                    # Cache hit: last prefix logit not available, approximate with first tree logit
+                    # This is a known limitation (see TODO above)
+                    tree_logits[i] = all_logits[0, 0, :]
+                elif prefix_length > 0:
+                    # No cache: all_logits contains prefix + tree, use last prefix position
+                    tree_logits[i] = all_logits[0, prefix_length - 1, :]
+                else:
+                    # No prefix at all (unusual case)
+                    tree_logits[i] = all_logits[0, 0, :]
+            else:
+                # Child node: use logits from parent's position
+                if cache_hit:
+                    # With cache: all_logits[j] corresponds to tree node j
+                    tree_logits[i] = all_logits[0, parent_idx, :]
+                else:
+                    # Without cache: all_logits contains prefix + tree
+                    tree_logits[i] = all_logits[0, prefix_length + parent_idx, :]
 
         draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
         # Shape: [num_tree_nodes]
