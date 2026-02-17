@@ -3,13 +3,16 @@
 from specsplit.core.config import DraftWorkerConfig, OrchestratorConfig, TargetWorkerConfig
 from specsplit.core.serialization import tensor_to_token_ids, token_ids_to_tensor
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
+from specsplit.core.verification import GreedyVerificationResult, verify_greedy_tree
 
 __all__ = [
     "DraftWorkerConfig",
-    "TargetWorkerConfig",
+    "GreedyVerificationResult",
     "OrchestratorConfig",
+    "Stopwatch",
+    "TargetWorkerConfig",
+    "TelemetryLogger",
     "tensor_to_token_ids",
     "token_ids_to_tensor",
-    "Stopwatch",
-    "TelemetryLogger",
+    "verify_greedy_tree",
 ]

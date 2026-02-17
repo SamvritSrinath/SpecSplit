@@ -24,9 +24,15 @@ service DraftService {
 
 // TargetService — served by the Target Worker (large LLM, expensive GPU).
 // Verifies draft token trees using tree-attention and returns accepted tokens.
+// Supports session-based KV caching to avoid prompt recomputation.
 service TargetService {
   // Verify a draft token tree against the target model's distribution.
+  // If session_id is provided, the server will reuse the KV cache from
+  // prior calls in the same session and roll it back to the accepted prefix.
   rpc VerifyDrafts (VerifyRequest) returns (VerifyResponse);
+
+  // Terminate a session and release its KV cache from GPU memory.
+  rpc EndSession (EndSessionRequest) returns (EndSessionResponse);
 
   // Health check / readiness probe.
   rpc Ping (PingRequest) returns (PingResponse);
@@ -73,6 +79,8 @@ message VerifyRequest {
   string  request_id     = 1;  // Unique request identifier for tracing.
   repeated int32 prompt_token_ids = 2;  // Original prompt context.
   repeated TokenNode draft_tree    = 3;  // Draft tree to verify.
+  string  session_id     = 4;  // Session ID for KV cache reuse across rounds.
+                               // If empty, verification is stateless (no caching).
 }
 
 // Response containing verification results.
@@ -82,6 +90,19 @@ message VerifyResponse {
   int32   correction_token_id = 3;  // Correction token sampled from target (if draft rejected).
   int32   num_accepted       = 4;  // Number of draft tokens accepted.
   TelemetryMetadata telemetry = 5;  // Server-side timing information.
+  string  session_id        = 6;  // Echo of session ID (confirms cache association).
+  bool    cache_hit         = 7;  // True if an existing KV cache was reused.
+}
+
+// Request to end a session and release its KV cache.
+message EndSessionRequest {
+  string  session_id = 1;  // The session to terminate.
+}
+
+// Response confirming session termination.
+message EndSessionResponse {
+  string  session_id   = 1;  // Echo of the terminated session ID.
+  bool    was_active   = 2;  // True if the session existed and was released.
 }
 
 // =============================================================================

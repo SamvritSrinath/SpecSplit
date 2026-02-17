@@ -79,6 +79,12 @@ class TargetWorkerConfig(BaseSettings):
         ge=1,
         description="gRPC thread pool size.",
     )
+    max_sessions: int = Field(
+        default=16,
+        ge=1,
+        description="Maximum concurrent KV cache sessions. Oldest sessions "
+        "are evicted (LRU) when this limit is reached.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_TARGET_"}
 

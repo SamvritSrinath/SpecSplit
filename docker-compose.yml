@@ -1,0 +1,88 @@
+# =============================================================================
+# SpecSplit — Docker Compose for local distributed simulation
+# =============================================================================
+#
+# Usage:
+#   docker compose up --build          # CPU-only local testing (default)
+#   docker compose up --build -d       # Detached mode
+#   docker compose down                # Tear down
+#
+# For GPU-enabled runs, uncomment the `deploy` sections below.
+# =============================================================================
+
+services:
+  # ---------------------------------------------------------------------------
+  # Draft Worker — small, fast LLM (gRPC on port 50051)
+  # ---------------------------------------------------------------------------
+  draft_worker:
+    build: .
+    container_name: specsplit-draft
+    command: ["-m", "specsplit.workers.draft.service"]
+    ports:
+      - "50051:50051"
+    environment:
+      - SPECSPLIT_DRAFT_MODEL_NAME=${DRAFT_MODEL:-gpt2}
+      - SPECSPLIT_DRAFT_DEVICE=${DRAFT_DEVICE:-cpu}
+      - SPECSPLIT_DRAFT_GRPC_PORT=50051
+    networks:
+      - specsplit-net
+    restart: unless-stopped
+    # Uncomment for GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Target Worker — large, accurate LLM (gRPC on port 50052)
+  # ---------------------------------------------------------------------------
+  target_worker:
+    build: .
+    container_name: specsplit-target
+    command: ["-m", "specsplit.workers.target.service"]
+    ports:
+      - "50052:50052"
+    environment:
+      - SPECSPLIT_TARGET_MODEL_NAME=${TARGET_MODEL:-gpt2}
+      - SPECSPLIT_TARGET_DEVICE=${TARGET_DEVICE:-cpu}
+      - SPECSPLIT_TARGET_GRPC_PORT=50052
+    networks:
+      - specsplit-net
+    restart: unless-stopped
+    # Uncomment for GPU passthrough:
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: 1
+    #           capabilities: [gpu]
+
+  # ---------------------------------------------------------------------------
+  # Orchestrator — pipeline coordinator (connects to both workers)
+  # ---------------------------------------------------------------------------
+  orchestrator:
+    build: .
+    container_name: specsplit-orchestrator
+    command: ["-m", "specsplit.workers.orchestrator.client", "--prompt", "${PROMPT:-The quick brown fox jumps over the lazy dog}"]
+    environment:
+      - SPECSPLIT_ORCH_DRAFT_ADDRESS=draft_worker:50051
+      - SPECSPLIT_ORCH_TARGET_ADDRESS=target_worker:50052
+      - SPECSPLIT_ORCH_MAX_ROUNDS=${MAX_ROUNDS:-20}
+      - SPECSPLIT_ORCH_TIMEOUT_S=${TIMEOUT_S:-30.0}
+    depends_on:
+      - draft_worker
+      - target_worker
+    networks:
+      - specsplit-net
+    restart: "no"
+
+# ---------------------------------------------------------------------------
+# Custom bridge network for service-to-service communication
+# ---------------------------------------------------------------------------
+networks:
+  specsplit-net:
+    driver: bridge
