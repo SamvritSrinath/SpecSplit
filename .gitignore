@@ -1,0 +1,62 @@
+# =============================================================================
+# SpecSplit .gitignore
+# =============================================================================
+
+# --- Python ---
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# --- Virtual environments ---
+.venv/
+venv/
+env/
+.conda/
+
+# --- Protobuf generated code ---
+*_pb2.py
+*_pb2_grpc.py
+*_pb2.pyi
+
+# --- IDE ---
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# --- Testing / Coverage ---
+.pytest_cache/
+htmlcov/
+.coverage
+coverage.xml
+
+# --- Mypy ---
+.mypy_cache/
+
+# --- Ruff ---
+.ruff_cache/
+
+# --- PyTorch / ML artifacts ---
+*.pt
+*.pth
+*.bin
+*.safetensors
+*.onnx
+checkpoints/
+wandb/
+runs/
+
+# --- Benchmark outputs ---
+benchmark_results/
+*.jsonl
+
+# --- Misc ---
+*.log
+.env
+.env.*

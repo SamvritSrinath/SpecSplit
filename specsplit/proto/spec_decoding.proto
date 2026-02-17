@@ -1,0 +1,105 @@
+// SpecSplit — Disaggregated Speculative Decoding
+// gRPC service and message definitions for draft/target communication.
+
+syntax = "proto3";
+
+package specsplit;
+
+option java_multiple_files = true;
+option java_package = "com.specsplit.proto";
+
+// =============================================================================
+// Services
+// =============================================================================
+
+// DraftService — served by the Draft Worker (small LLM, cheap GPU).
+// Generates speculative token trees from a given prompt context.
+service DraftService {
+  // Generate a speculative token tree of depth K from the current context.
+  rpc GenerateDrafts (DraftRequest) returns (DraftResponse);
+
+  // Health check / readiness probe.
+  rpc Ping (PingRequest) returns (PingResponse);
+}
+
+// TargetService — served by the Target Worker (large LLM, expensive GPU).
+// Verifies draft token trees using tree-attention and returns accepted tokens.
+service TargetService {
+  // Verify a draft token tree against the target model's distribution.
+  rpc VerifyDrafts (VerifyRequest) returns (VerifyResponse);
+
+  // Health check / readiness probe.
+  rpc Ping (PingRequest) returns (PingResponse);
+}
+
+// =============================================================================
+// Messages — Token Tree Structure
+// =============================================================================
+
+// A single node in the speculative token tree.
+// Each node represents a candidate token with its draft probability.
+message TokenNode {
+  int32  token_id    = 1;  // Vocabulary index of the candidate token.
+  float  log_prob    = 2;  // Log-probability assigned by the draft model.
+  repeated TokenNode children = 3;  // Child candidates (branching factor).
+}
+
+// =============================================================================
+// Messages — Draft Service
+// =============================================================================
+
+// Request to generate a speculative draft tree.
+message DraftRequest {
+  string  request_id     = 1;  // Unique request identifier for tracing.
+  repeated int32 prompt_token_ids = 2;  // Tokenized prompt context.
+  int32   max_draft_len  = 3;  // Maximum tree depth (K).
+  int32   num_beams      = 4;  // Branching factor at each level.
+  float   temperature    = 5;  // Sampling temperature for draft generation.
+}
+
+// Response containing the generated draft tree.
+message DraftResponse {
+  string  request_id     = 1;  // Echo of the request identifier.
+  repeated TokenNode draft_tree = 2;  // Root-level candidate tokens (forest).
+  TelemetryMetadata telemetry  = 3;  // Server-side timing information.
+}
+
+// =============================================================================
+// Messages — Target Service
+// =============================================================================
+
+// Request to verify a draft tree against the target model.
+message VerifyRequest {
+  string  request_id     = 1;  // Unique request identifier for tracing.
+  repeated int32 prompt_token_ids = 2;  // Original prompt context.
+  repeated TokenNode draft_tree    = 3;  // Draft tree to verify.
+}
+
+// Response containing verification results.
+message VerifyResponse {
+  string  request_id        = 1;  // Echo of the request identifier.
+  repeated int32 accepted_token_ids = 2;  // Longest accepted prefix from the tree.
+  int32   correction_token_id = 3;  // Correction token sampled from target (if draft rejected).
+  int32   num_accepted       = 4;  // Number of draft tokens accepted.
+  TelemetryMetadata telemetry = 5;  // Server-side timing information.
+}
+
+// =============================================================================
+// Messages — Telemetry & Utilities
+// =============================================================================
+
+// Timing and diagnostic metadata attached to RPC responses.
+message TelemetryMetadata {
+  string  span_id           = 1;  // Distributed trace span identifier.
+  double  wall_time_ms      = 2;  // Wall-clock time for the RPC handler (ms).
+  double  model_time_ms     = 3;  // Time spent in model forward pass (ms).
+  int32   tokens_processed  = 4;  // Number of tokens processed in this call.
+  string  device            = 5;  // Device identifier (e.g., "cuda:0").
+}
+
+// Simple health-check messages.
+message PingRequest  {}
+message PingResponse {
+  string  status = 1;  // "ok" if healthy.
+  string  worker_type = 2;  // "draft" or "target".
+}
