@@ -352,14 +352,19 @@ class TestVerifyWithMockedModel:
     ) -> None:
         """When target argmax matches all draft tokens, all should be accepted."""
         draft_ids = [10, 20, 30]
-        # Model returns logits where argmax matches draft tokens exactly:
-        # Position 0 (prompt context) → don't care (logits for prompt)
-        # Position 1 (prompt context) → don't care
-        # Position 2 (tree pos 0) → token 10
-        # Position 3 (tree pos 1) → token 20
-        # Position 4 (tree pos 2) → token 30
+        # With corrected logit alignment semantics:
+        # - To verify draft token i, we use logits from its PARENT position
+        # - For roots: use logits from last prefix position (position 1)
+        # - For children: use logits from parent position
+        # Position 0 (prompt[0]) → logits predict prompt[1] (don't care, use 0)
+        # Position 1 (prompt[1]) → logits predict tree[0]=10 (root)
+        # Position 2 (tree[0])   → logits predict tree[1]=20 (child of tree[0])
+        # Position 3 (tree[1])   → logits predict tree[2]=30 (child of tree[1])
+        # Position 4 (tree[2])   → logits predict next (don't care, use 0)
         prompt_ids = [1, 2]
-        accept_tokens = list(prompt_ids) + draft_ids
+        # accept_tokens[i] = what argmax(logits[i]) should be
+        # Positions 0 and 4 are placeholders (not used in verification); value 0 is arbitrary
+        accept_tokens = [0, 10, 20, 30, 0]
         mock_model_cls.return_value = _make_mock_target_model(
             accept_tokens=accept_tokens,
         )
@@ -390,8 +395,11 @@ class TestVerifyWithMockedModel:
         """When target disagrees at position 2, only first 2 tokens accepted."""
         draft_ids = [10, 20, 30]
         prompt_ids = [1, 2]
-        # Target agrees with 10, 20 but predicts 99 where draft says 30
-        accept_tokens = [*prompt_ids, 10, 20, 99]
+        # With corrected semantics, target agrees with 10, 20 but predicts 99 where draft says 30:
+        # Position 1 (prompt[1]) → logits predict 10 (tree[0])
+        # Position 2 (tree[0])   → logits predict 20 (tree[1])
+        # Position 3 (tree[1])   → logits predict 99 (MISMATCH, draft=30)
+        accept_tokens = [0, 10, 20, 99, 0]
         mock_model_cls.return_value = _make_mock_target_model(
             accept_tokens=accept_tokens,
         )

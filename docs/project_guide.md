@@ -122,7 +122,8 @@ python -m specsplit.workers.orchestrator.client \
 |---------|-------------|
 | `make install` | Install package in editable mode |
 | `make proto` | Regenerate gRPC Python stubs |
-| `make test` | Run full test suite (unit + integration) |
+| `make test` | Run unit tests only |
+| `make test-all` | Run full test suite (unit + integration) |
 | `make lint` | Lint with ruff |
 | `make typecheck` | Static analysis with mypy |
 | `make format` | Auto-format with ruff |

@@ -47,7 +47,7 @@ pytest tests/unit/ -v
 ### Integration Tests Only
 
 ```bash
-pytest tests/integration/ -v -s --timeout=300
+pytest tests/integration/ -v -s
 ```
 
 > Integration tests download models on first run (~1 GB for Qwen2.5-0.5B).

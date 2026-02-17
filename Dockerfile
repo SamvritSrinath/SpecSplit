@@ -46,7 +46,6 @@ RUN python -m grpc_tools.protoc \
         --proto_path=specsplit/proto \
         --python_out=specsplit/proto \
         --grpc_python_out=specsplit/proto \
-        --mypy_out=specsplit/proto \
         specsplit/proto/spec_decoding.proto \
     && sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
         specsplit/proto/spec_decoding_pb2_grpc.py \
