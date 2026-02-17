@@ -129,6 +129,15 @@ class BenchmarkOrchestrator:
     def run_and_measure(self, prompt: str, prompt_token_count: int) -> RequestMetrics:
         """Run a single prompt through the pipeline and measure everything.
 
+        .. warning::
+            **Simulated Metrics:** This method currently generates simulated
+            per-round metrics (fixed 30/50/20 time splits, ``tokens_accepted=0``,
+            ``acceptance_rate=0.0``, and token counts estimated from output text)
+            because it calls the real ``Orchestrator.run()`` which doesn't yet
+            expose round-level instrumentation. The produced CSV numbers will be
+            misleading for actual benchmarks until the pipeline returns structured
+            ``PipelineResult`` objects with real telemetry.
+
         The benchmark instruments the orchestrator's internal flow by timing
         each draft→verify round independently.  Because the real pipeline
         is still stubbed, this uses a **simulated timing model** that
