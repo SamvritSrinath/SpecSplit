@@ -479,11 +479,34 @@ class TargetEngine:
         accepted_ids = greedy_result.accepted_tokens
         correction = greedy_result.bonus_token if greedy_result.bonus_token >= 0 else None
 
-        # --- Step 8: Rollback cache to accepted prefix ---
+        # --- Step 8: Rollback cache to accepted prefix and extend with correction ---
         if session_id is not None and cache_state is not None:
             accepted_total = prefix_length + greedy_result.num_accepted
             if accepted_total <= cache_state.seq_len:
                 self.rollback_cache(session_id, accepted_total)
+            
+            # If we're emitting a correction/bonus token, extend the cache to include it
+            # so subsequent rounds can build on the full accepted + correction prefix.
+            if correction is not None and correction >= 0:
+                correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
+                with torch.no_grad():
+                    correction_output = self._model(
+                        input_ids=correction_input,
+                        past_key_values=cache_state.past_key_values,
+                        use_cache=True,
+                    )
+                # Update cache with the correction token
+                cache_state.past_key_values = correction_output.past_key_values
+                cache_state.seq_len = (
+                    correction_output.past_key_values[0][0].shape[2]
+                    if correction_output.past_key_values
+                    else 0
+                )
+                logger.debug(
+                    "Extended cache with correction token %d, new seq_len=%d",
+                    correction,
+                    cache_state.seq_len,
+                )
 
         sw.stop()
         logger.debug(
