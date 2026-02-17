@@ -27,7 +27,7 @@ Monolithic speculative decoding couples two fundamentally asymmetric workloads
 onto a single GPU: **cheap autoregressive drafting** (small model, sequential, KV-cache-bound)
 and **expensive parallel verification** (large model, batched tree-attention,
 compute-bound). Because both models must co-reside in VRAM, operators pay a
-**"VRAM Tax"** — the draft model's memory footprint permanently displetes capacity
+**"VRAM Tax"** — the draft model's memory footprint permanently depletes capacity
 that could otherwise serve larger batches or bigger target models. This coupling
 forces over-provisioning: organizations rent A100-class hardware for a task that is
 90% draft generation on what could be a T4.

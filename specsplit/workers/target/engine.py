@@ -20,7 +20,7 @@ Architecture Notes:
 from __future__ import annotations
 
 import logging
-from collections import deque
+from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -143,8 +143,8 @@ class TargetEngine:
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._is_loaded = False
 
-        # Session → KV cache mapping
-        self._session_caches: dict[str, KVCacheState] = {}
+        # Session → KV cache mapping (LRU ordered)
+        self._session_caches: OrderedDict[str, KVCacheState] = OrderedDict()
 
         logger.info(
             "TargetEngine initialized (model=%s, device=%s, max_sessions=%d)",
@@ -196,6 +196,8 @@ class TargetEngine:
             if an existing cache was found.
         """
         if session_id in self._session_caches:
+            # Move to end to mark as recently used (LRU)
+            self._session_caches.move_to_end(session_id)
             logger.debug(
                 "Session cache hit: %s (seq_len=%d)",
                 session_id,
@@ -205,10 +207,9 @@ class TargetEngine:
 
         # Enforce max-sessions limit with LRU eviction
         if len(self._session_caches) >= self.config.max_sessions:
-            evict_id = next(iter(self._session_caches))
-            self.end_session(evict_id)
+            evict_id, _ = self._session_caches.popitem(last=False)  # Remove oldest (first)
             logger.warning(
-                "Evicted oldest session %s (max_sessions=%d)", evict_id, self.config.max_sessions
+                "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
             )
 
         cache = KVCacheState()

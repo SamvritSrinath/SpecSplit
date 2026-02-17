@@ -488,13 +488,16 @@ async def run_speculative_loop_async(
         # --------------------------------------------------------------
         # Step C: Check if our speculation was correct
         # --------------------------------------------------------------
-        # The speculation assumed ALL draft tokens would be accepted.
-        # If the actual accepted prefix matches our assumption, the
-        # speculative draft N+1 is valid and can be used directly.
         actual_accepted = list(verify_result.accepted_tokens)
+        # Consider speculation correct if the actually accepted tokens match
+        # the prefix of our speculative assumption. We intentionally avoid
+        # comparing the lengths of the accepted tokens and the full
+        # speculative_assumption, because speculative_assumption may be
+        # derived from a flattened multi-beam token tree rather than a
+        # single branch, making a strict length equality unreliable.
         speculation_correct = actual_accepted == speculative_assumption[
             : len(actual_accepted)
-        ] and len(actual_accepted) == len(speculative_assumption)
+        ]
 
         if speculation_correct:
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
