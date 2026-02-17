@@ -363,7 +363,8 @@ class TestVerifyWithMockedModel:
         # Position 4 (tree[2])   → logits predict next (don't care, use 0)
         prompt_ids = [1, 2]
         # accept_tokens[i] = what argmax(logits[i]) should be
-        accept_tokens = [0, 10, 20, 30, 0]  # pos 0 and 4 don't matter
+        # Positions 0 and 4 are placeholders (not used in verification); value 0 is arbitrary
+        accept_tokens = [0, 10, 20, 30, 0]
         mock_model_cls.return_value = _make_mock_target_model(
             accept_tokens=accept_tokens,
         )
