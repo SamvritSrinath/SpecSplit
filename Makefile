@@ -20,6 +20,8 @@ proto: ## Generate Python stubs from protobuf definitions
 		--grpc_python_out=$(PROTO_DIR) \
 		--mypy_out=$(PROTO_DIR) \
 		$(PROTO_SRC)
+	sed -i '' 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+		$(PROTO_DIR)/spec_decoding_pb2_grpc.py
 	@echo "✓ Proto stubs generated in $(PROTO_DIR)/"
 
 test: ## Run unit tests (excludes integration)

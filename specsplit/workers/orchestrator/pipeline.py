@@ -31,6 +31,7 @@ Pipeline Architecture
     │                       │   verify(N+1) ██████████████│
     │                       │   draft(N+2)      ██████│   │
 
+
 The ``draft(N+1)`` call runs *during* ``verify(N)``, saving one full
 round-trip per iteration when the speculation is correct.
 """
@@ -39,11 +40,13 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import uuid
 from dataclasses import dataclass, field
 from typing import Any
 
 from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
+from specsplit.proto import spec_decoding_pb2
 
 logger = logging.getLogger(__name__)
 
@@ -60,12 +63,15 @@ class DraftTree:
     Attributes:
         token_ids: Flat list of drafted token IDs in tree order.
         topology_map: Parent indices for each node (-1 = root).
+        proto_nodes: The raw protobuf ``TokenNode`` messages, preserved
+            for direct forwarding to the Target Worker without re-encoding.
         round_idx: The pipeline round that produced this tree.
     """
 
     token_ids: list[int]
     topology_map: list[int]
-    round_idx: int
+    proto_nodes: list[Any] = field(default_factory=list)
+    round_idx: int = 0
 
 
 @dataclass
@@ -134,11 +140,41 @@ class PipelineResult:
 
 
 # ============================================================================
-# Async gRPC Stub Wrappers
+# Protobuf ↔ DraftTree Conversion Helpers
 # ============================================================================
-# These wrappers abstract the gRPC stub calls into async coroutines.
-# In production, they use grpc.aio stubs.  For testing, they can be
-# replaced with mock implementations.
+
+
+def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
+    """Flatten nested protobuf ``TokenNode`` messages into parallel arrays.
+
+    Performs a DFS traversal and assigns contiguous indices.
+
+    Args:
+        proto_nodes: Root-level ``spec_decoding_pb2.TokenNode`` messages.
+
+    Returns:
+        ``(token_ids, topology_map)`` where ``topology_map[i]`` is the
+        parent index of node ``i`` (``-1`` for roots).
+    """
+    token_ids: list[int] = []
+    topology_map: list[int] = []
+
+    def _walk(node: Any, parent_idx: int) -> None:
+        my_idx = len(token_ids)
+        token_ids.append(node.token_id)
+        topology_map.append(parent_idx)
+        for child in node.children:
+            _walk(child, my_idx)
+
+    for root in proto_nodes:
+        _walk(root, -1)
+
+    return token_ids, topology_map
+
+
+# ============================================================================
+# Async gRPC Stub Wrappers — Real gRPC calls
+# ============================================================================
 
 
 async def _call_generate_drafts(
@@ -148,10 +184,13 @@ async def _call_generate_drafts(
     config: OrchestratorConfig,
     round_idx: int,
 ) -> DraftTree:
-    """Call DraftService.GenerateDrafts over async gRPC.
+    """Call ``DraftService.GenerateDrafts`` over gRPC.
+
+    Constructs a ``DraftRequest`` protobuf, sends it to the Draft Worker,
+    and converts the ``DraftResponse`` into a :class:`DraftTree`.
 
     Args:
-        draft_stub: An async gRPC stub for DraftService (``grpc.aio``).
+        draft_stub: A gRPC stub for DraftService (sync or async).
         prompt_ids: Original prompt token IDs.
         context_ids: Current context (prompt + generated so far).
         config: Pipeline configuration.
@@ -159,32 +198,29 @@ async def _call_generate_drafts(
 
     Returns:
         A :class:`DraftTree` produced by the Draft Worker.
-
-    .. todo::
-        Replace with real gRPC call::
-
-            request = spec_decoding_pb2.DraftRequest(
-                request_id=f"round-{round_idx}",
-                prompt_token_ids=context_ids,
-                max_draft_len=config.max_draft_len,
-            )
-            response = await draft_stub.GenerateDrafts(request)
     """
-    # --- Stub implementation for pipeline testing ---
-    # Simulates a draft generation with a small async delay to mimic
-    # network + inference latency.
-    await asyncio.sleep(0.001)  # Simulate ~1ms draft latency
+    request = spec_decoding_pb2.DraftRequest(
+        request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
+        prompt_token_ids=context_ids,
+        max_draft_len=5,  # default draft depth
+    )
 
-    # Produce a simple linear chain (no branching) as a stub.
-    # In production, the Draft Worker returns a real tree.
-    num_draft = 5
-    stub_ids = list(range(1000 + round_idx * 100, 1000 + round_idx * 100 + num_draft))
-    stub_topo = [-1, *list(range(num_draft - 1))]  # Linear chain
+    response = draft_stub.GenerateDrafts(request)
+    # Support both sync and async stubs
+    if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+        response = await response
 
-    logger.debug("Draft RPC completed (stub): round=%d, tokens=%d", round_idx, num_draft)
+    # Convert the nested proto tree to flat arrays
+    proto_nodes = list(response.draft_tree)
+    token_ids, topology_map = _flatten_proto_tree(proto_nodes)
+
+    logger.debug(
+        "Draft RPC completed: round=%d, tokens=%d", round_idx, len(token_ids),
+    )
     return DraftTree(
-        token_ids=stub_ids,
-        topology_map=stub_topo,
+        token_ids=token_ids,
+        topology_map=topology_map,
+        proto_nodes=proto_nodes,
         round_idx=round_idx,
     )
 
@@ -196,73 +232,78 @@ async def _call_verify_drafts(
     session_id: str,
     config: OrchestratorConfig,
 ) -> VerificationResult:
-    """Call TargetService.VerifyDrafts over async gRPC.
+    """Call ``TargetService.VerifyDrafts`` over gRPC.
+
+    Forwards the draft tree's proto nodes directly to the Target Worker
+    to avoid re-encoding.
 
     Args:
-        target_stub: An async gRPC stub for TargetService (``grpc.aio``).
+        target_stub: A gRPC stub for TargetService (sync or async).
         prompt_ids: Original prompt token IDs.
-        draft_tree: The draft tree to verify.
+        draft_tree: The draft tree to verify (with preserved proto nodes).
         session_id: Session ID for KV cache reuse.
         config: Pipeline configuration.
 
     Returns:
         A :class:`VerificationResult` from the Target Worker.
-
-    .. todo::
-        Replace with real gRPC call::
-
-            request = spec_decoding_pb2.VerifyRequest(
-                request_id=f"verify-{draft_tree.round_idx}",
-                prompt_token_ids=prompt_ids,
-                draft_tree=_to_proto_tree(draft_tree),
-                session_id=session_id,
-            )
-            response = await target_stub.VerifyDrafts(request)
     """
-    # --- Stub implementation ---
-    # Simulates verification with higher latency (target model is big).
-    await asyncio.sleep(0.005)  # Simulate ~5ms target latency
+    request = spec_decoding_pb2.VerifyRequest(
+        request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
+        prompt_token_ids=prompt_ids,
+        draft_tree=draft_tree.proto_nodes,
+        session_id=session_id,
+    )
 
-    # Stub: accept first 3 tokens of the draft
-    accepted_count = min(3, len(draft_tree.token_ids))
-    accepted_tokens = draft_tree.token_ids[:accepted_count]
-    bonus = draft_tree.token_ids[accepted_count] + 9000 if accepted_count < len(
-        draft_tree.token_ids
-    ) else 9999
+    response = target_stub.VerifyDrafts(request)
+    # Support both sync and async stubs
+    if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+        response = await response
+
+    accepted_tokens = list(response.accepted_token_ids)
+    correction = response.correction_token_id if response.correction_token_id != 0 else None
 
     logger.debug(
-        "Verify RPC completed (stub): round=%d, accepted=%d/%d",
-        draft_tree.round_idx, accepted_count, len(draft_tree.token_ids),
+        "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s",
+        draft_tree.round_idx,
+        response.num_accepted,
+        len(draft_tree.token_ids),
+        correction,
     )
     return VerificationResult(
         accepted_tokens=accepted_tokens,
-        bonus_token=bonus,
-        accepted_length=accepted_count,
-        cache_hit=draft_tree.round_idx > 0,
+        bonus_token=response.correction_token_id,
+        accepted_length=response.num_accepted,
+        cache_hit=response.cache_hit,
         round_idx=draft_tree.round_idx,
     )
 
 
 async def _call_flush_draft_cache(
-    draft_stub: Any,
+    target_stub: Any,
     session_id: str,
 ) -> None:
-    """Send a flush/interrupt signal to the Draft Worker.
+    """Send an ``EndSession`` signal to flush the Target Worker's KV cache.
 
-    Called when speculation is invalidated and the Draft Worker's
-    speculative cache must be cleared.
+    Called when speculation is invalidated and the speculative cache
+    must be cleared for the session.
 
     Args:
-        draft_stub: An async gRPC stub for DraftService.
+        target_stub: A gRPC stub for TargetService (sync or async).
         session_id: Session ID to flush.
-
-    .. todo::
-        Replace with real gRPC call (e.g., a ResetCache RPC or
-        re-sending context with a flush flag).
     """
-    # Stub: just log
-    logger.debug("Draft cache flush signal sent (stub): session=%s", session_id)
-    await asyncio.sleep(0.0001)  # Tiny simulated latency
+    request = spec_decoding_pb2.EndSessionRequest(session_id=session_id)
+    try:
+        response = target_stub.EndSession(request)
+        if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+            response = await response
+        logger.debug(
+            "Cache flush completed: session=%s, was_active=%s",
+            session_id,
+            response.was_active,
+        )
+    except Exception:
+        # EndSession is best-effort; don't break the pipeline
+        logger.debug("Cache flush failed (non-critical): session=%s", session_id)
 
 
 # ============================================================================
@@ -291,8 +332,8 @@ async def run_speculative_loop_async(
            re-draft from corrected context.
 
     Args:
-        draft_stub: Async gRPC stub for the Draft Service.
-        target_stub: Async gRPC stub for the Target Service.
+        draft_stub: gRPC stub for the Draft Service (sync or async).
+        target_stub: gRPC stub for the Target Service (sync or async).
         prompt_ids: Tokenized input prompt.
         config: Pipeline configuration (defaults, timeouts, limits).
         session_id: Session ID for KV cache reuse on the Target Worker.
@@ -403,7 +444,7 @@ async def run_speculative_loop_async(
 
         # Append accepted tokens and bonus token to output
         new_tokens = list(verify_result.accepted_tokens)
-        if verify_result.bonus_token is not None:
+        if verify_result.bonus_token is not None and verify_result.bonus_token != 0:
             new_tokens.append(verify_result.bonus_token)
 
         state.generated_tokens.extend(new_tokens)
@@ -459,8 +500,8 @@ async def run_speculative_loop_async(
                 len(speculative_assumption),
             )
 
-            # Send flush signal to Draft Worker to clear its speculative cache
-            await _call_flush_draft_cache(draft_stub, session_id)
+            # Send flush signal to Target Worker to clear its speculative cache
+            await _call_flush_draft_cache(target_stub, session_id)
 
             # Re-draft from the CORRECTED context
             with telemetry.span("re_draft", round_idx=round_idx):

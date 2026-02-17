@@ -15,10 +15,12 @@ Architecture Notes:
 from __future__ import annotations
 
 import logging
+import math
 from dataclasses import dataclass, field
 from typing import Any
 
 import torch
+from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from specsplit.core.config import DraftWorkerConfig
 from specsplit.core.serialization import logits_to_probs
@@ -48,8 +50,7 @@ class DraftEngine:
     """Autoregressive generation engine for the Draft Worker.
 
     This class manages model loading, KV cache state, and speculative
-    tree generation. The actual model inference is stubbed with TODO
-    markers — plug in your model-specific forward pass.
+    tree generation using a real HuggingFace ``AutoModelForCausalLM``.
 
     Args:
         config: Draft worker configuration (model name, device, etc.).
@@ -58,9 +59,10 @@ class DraftEngine:
     def __init__(self, config: DraftWorkerConfig | None = None) -> None:
         self.config = config or DraftWorkerConfig()
         self.device = torch.device(self.config.device)
-        self._model: Any = None  # Will hold the HF model
-        self._tokenizer: Any = None  # Will hold the HF tokenizer
-        self._kv_cache: Any = None  # Model-specific KV cache
+        self._model: Any = None  # transformers.AutoModelForCausalLM
+        self._tokenizer: Any = None  # transformers.AutoTokenizer
+        self._kv_cache: Any = None  # Model-specific past_key_values
+        self._cached_prompt_len: int = 0  # Length of prompt encoded in _kv_cache
         self._is_loaded = False
 
         logger.info(
@@ -70,21 +72,23 @@ class DraftEngine:
         )
 
     def load_model(self) -> None:
-        """Load the draft model and tokenizer.
+        """Load the draft model and tokenizer via ``AutoModelForCausalLM``.
 
-        .. todo::
-            Replace the stub below with actual ``AutoModelForCausalLM`` /
-            ``AutoTokenizer`` loading from HuggingFace.
+        Uses ``torch.float16`` precision and places the model on the
+        configured device.  The tokenizer's pad token is set to
+        ``eos_token`` if not already defined.
         """
-        # TODO(model-loading): Uncomment and adapt for your model:
-        # from transformers import AutoModelForCausalLM, AutoTokenizer
-        # self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-        # self._model = AutoModelForCausalLM.from_pretrained(
-        #     self.config.model_name,
-        #     torch_dtype=torch.float16,
-        # ).to(self.device).eval()
+        self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        if self._tokenizer.pad_token is None:
+            self._tokenizer.pad_token = self._tokenizer.eos_token
+
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            torch_dtype=torch.float16,
+        ).to(self.device).eval()
+
         self._is_loaded = True
-        logger.info("Draft model loaded: %s", self.config.model_name)
+        logger.info("Draft model loaded: %s on %s", self.config.model_name, self.device)
 
     def generate_draft_tree(
         self,
@@ -95,20 +99,22 @@ class DraftEngine:
     ) -> list[TokenNode]:
         """Generate a speculative token tree from the given prompt context.
 
-        Performs *k* steps of autoregressive generation, optionally branching
-        at each step to produce ``num_beams`` children per node.
+        Performs *k* steps of autoregressive generation using KV caching.
+        Each "beam" is an independent greedy/sampled chain (no beam-search
+        coupling).  The result is a list of root ``TokenNode`` objects,
+        each heading a flat chain of depth *k*.
 
         Args:
             prompt_ids: Tokenized prompt (list of vocabulary indices).
             k: Tree depth (defaults to ``config.max_draft_tokens``).
-            num_beams: Branching factor (defaults to ``config.num_beams``).
-            temperature: Sampling temperature (defaults to ``config.temperature``).
+            num_beams: Number of independent chains (defaults to
+                ``config.num_beams``).
+            temperature: Sampling temperature (defaults to
+                ``config.temperature``).
 
         Returns:
-            A list of root-level ``TokenNode`` objects forming the draft forest.
-
-        .. todo::
-            Wire up the real model forward pass and KV cache management.
+            A list of root-level ``TokenNode`` objects forming the draft
+            forest.
         """
         k = k or self.config.max_draft_tokens
         num_beams = num_beams or self.config.num_beams
@@ -117,20 +123,81 @@ class DraftEngine:
         sw = Stopwatch()
         sw.start()
 
-        # TODO(inference): Replace this stub with actual model inference.
-        # The stub generates a linear chain of dummy tokens for testing.
+        if not self._is_loaded or self._model is None:
+            raise RuntimeError("Draft model not loaded. Call load_model() first.")
+
+        # -----------------------------------------------------------------
+        # Encode the prompt prefix (or reuse cached KV)
+        # -----------------------------------------------------------------
+        input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
+        # Shape: [1, prompt_len]
+
+        with torch.no_grad():
+            # Always recompute prompt for simplicity per-call
+            # (cross-round caching will be added in a future PR)
+            prefix_out = self._model(
+                input_ids=input_ids,
+                past_key_values=None,
+                use_cache=True,
+            )
+            past_kv = prefix_out.past_key_values
+            # last_logits shape: [1, prompt_len, vocab_size]
+            last_logits = prefix_out.logits[:, -1, :]
+            # Shape: [1, vocab_size]
+
+        # -----------------------------------------------------------------
+        # Autoregressive draft generation — produce `num_beams` chains
+        # -----------------------------------------------------------------
         roots: list[TokenNode] = []
-        for beam in range(num_beams):
-            node = TokenNode(token_id=beam + 1, log_prob=-0.1 * (beam + 1))
-            current = node
-            for depth in range(1, k):
-                child = TokenNode(
-                    token_id=(beam + 1) * 100 + depth,
-                    log_prob=-0.1 * (depth + 1),
-                )
-                current.children.append(child)
-                current = child
-            roots.append(node)
+
+        for _beam_idx in range(num_beams):
+            # Each beam starts from the same prompt prefix KV cache
+            beam_past_kv = past_kv
+            current_logits = last_logits  # Shape: [1, vocab_size]
+            chain: list[tuple[int, float]] = []
+
+            for _step in range(k):
+                with torch.no_grad():
+                    # Sample or greedy-pick the next token
+                    probs = logits_to_probs(current_logits, temperature=temperature)
+                    # Shape: [1, vocab_size]
+
+                    if temperature == 0.0:
+                        # Greedy
+                        next_token_id = current_logits.argmax(dim=-1)  # [1]
+                    else:
+                        # Top-k=1 multinomial (temperature-scaled greedy for
+                        # temp≈1, or stochastic sampling)
+                        next_token_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
+                        # Shape: [1]
+
+                    token_id_int = next_token_id.item()
+                    # Log probability of the chosen token
+                    log_prob = math.log(
+                        probs[0, token_id_int].item() + 1e-10
+                    )
+                    chain.append((token_id_int, log_prob))
+
+                    # Forward pass for the next step with KV cache
+                    next_input = next_token_id.unsqueeze(0)  # [1, 1]
+                    step_out = self._model(
+                        input_ids=next_input,
+                        past_key_values=beam_past_kv,
+                        use_cache=True,
+                    )
+                    beam_past_kv = step_out.past_key_values
+                    current_logits = step_out.logits[:, -1, :]
+                    # Shape: [1, vocab_size]
+
+            # Build a flat TokenNode chain from the collected tokens
+            if chain:
+                root = TokenNode(token_id=chain[0][0], log_prob=chain[0][1])
+                current_node = root
+                for tid, lp in chain[1:]:
+                    child = TokenNode(token_id=tid, log_prob=lp)
+                    current_node.children.append(child)
+                    current_node = child
+                roots.append(root)
 
         sw.stop()
         logger.debug(
@@ -144,6 +211,7 @@ class DraftEngine:
     def reset_cache(self) -> None:
         """Clear the KV cache (e.g., on prompt change or verification failure)."""
         self._kv_cache = None
+        self._cached_prompt_len = 0
         logger.debug("KV cache cleared")
 
     @property

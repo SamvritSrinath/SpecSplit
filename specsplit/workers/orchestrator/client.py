@@ -13,19 +13,22 @@ Usage::
 from __future__ import annotations
 
 import argparse
+import asyncio
 import logging
 import sys
 from typing import Any
 
+import grpc
+
 from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import TelemetryLogger
+from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
+from specsplit.workers.orchestrator.pipeline import (
+    PipelineResult,
+    run_speculative_loop_async,
+)
 
 logger = logging.getLogger(__name__)
-
-# NOTE: Import generated protobuf modules after `make proto`:
-# import grpc
-# from specsplit.proto import spec_decoding_pb2
-# from specsplit.proto import spec_decoding_pb2_grpc
 
 
 class Orchestrator:
@@ -40,61 +43,97 @@ class Orchestrator:
 
     Args:
         config: Orchestrator configuration (addresses, timeouts, limits).
+        model_name: HuggingFace model name for the tokenizer. Defaults to
+            ``"gpt2"``.
     """
 
-    def __init__(self, config: OrchestratorConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: OrchestratorConfig | None = None,
+        model_name: str = "gpt2",
+    ) -> None:
         self.config = config or OrchestratorConfig()
+        self.model_name = model_name
         self._telemetry = TelemetryLogger(service_name="orchestrator")
-        self._draft_stub: Any = None
-        self._target_stub: Any = None
+        self._draft_channel: grpc.Channel | None = None
+        self._target_channel: grpc.Channel | None = None
+        self._draft_stub: spec_decoding_pb2_grpc.DraftServiceStub | None = None
+        self._target_stub: spec_decoding_pb2_grpc.TargetServiceStub | None = None
+        self._tokenizer: Any = None
 
         logger.info(
-            "Orchestrator initialized (draft=%s, target=%s)",
+            "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s)",
             self.config.draft_address,
             self.config.target_address,
+            self.model_name,
         )
 
-    def connect(self) -> None:
-        """Establish gRPC channels to Draft and Target workers.
+    def _ensure_tokenizer(self) -> Any:
+        """Lazily load the HuggingFace tokenizer on first use."""
+        if self._tokenizer is None:
+            from transformers import AutoTokenizer
 
-        .. todo::
-            Create gRPC channels and stubs from generated code.
-        """
-        # TODO(grpc-channels): Uncomment after `make proto`:
-        # draft_channel = grpc.insecure_channel(self.config.draft_address)
-        # self._draft_stub = spec_decoding_pb2_grpc.DraftServiceStub(draft_channel)
-        #
-        # target_channel = grpc.insecure_channel(self.config.target_address)
-        # self._target_stub = spec_decoding_pb2_grpc.TargetServiceStub(target_channel)
-        logger.info("gRPC channels established (stubbed)")
+            self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
+            if self._tokenizer.pad_token is None:
+                self._tokenizer.pad_token = self._tokenizer.eos_token
+            logger.info("Tokenizer loaded: %s", self.model_name)
+        return self._tokenizer
+
+    def connect(self) -> None:
+        """Establish gRPC channels to Draft and Target workers."""
+        self._draft_channel = grpc.insecure_channel(self.config.draft_address)
+        self._draft_stub = spec_decoding_pb2_grpc.DraftServiceStub(
+            self._draft_channel,
+        )
+
+        self._target_channel = grpc.insecure_channel(self.config.target_address)
+        self._target_stub = spec_decoding_pb2_grpc.TargetServiceStub(
+            self._target_channel,
+        )
+
+        logger.info("gRPC channels established")
 
     def run(self, prompt: str) -> str:
         """Run the full speculative decoding pipeline for a given prompt.
+
+        Tokenizes the prompt, executes the async speculative loop over
+        gRPC, and decodes the resulting tokens back to a string.
 
         Args:
             prompt: The user's input text prompt.
 
         Returns:
             The generated output text.
-
-        .. todo::
-            Implement the full tokenization → draft → verify → decode loop.
         """
         logger.info("Starting generation for prompt: %r", prompt[:80])
 
-        with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
-            # TODO(pipeline): Implement the actual pipeline:
-            #
-            # 1. Tokenize the prompt
-            # 2. Loop for max_rounds:
-            #    a. Call DraftService.GenerateDrafts
-            #    b. Call TargetService.VerifyDrafts
-            #    c. Append accepted tokens
-            #    d. Check stopping criteria
-            # 3. Decode final token sequence to text
+        tokenizer = self._ensure_tokenizer()
+        prompt_ids: list[int] = tokenizer.encode(prompt)
+        eos_token_id: int = tokenizer.eos_token_id or 2
 
-            output_text = f"[STUB] Generated output for: {prompt[:40]}..."
-            logger.info("Pipeline complete (stubbed)")
+        with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
+            result: PipelineResult = asyncio.run(
+                run_speculative_loop_async(
+                    draft_stub=self._draft_stub,
+                    target_stub=self._target_stub,
+                    prompt_ids=prompt_ids,
+                    config=self.config,
+                    eos_token_id=eos_token_id,
+                )
+            )
+
+            output_text = tokenizer.decode(
+                result.output_tokens, skip_special_tokens=True,
+            )
+
+            logger.info(
+                "Pipeline complete: %d tokens in %d rounds, "
+                "acceptance=%.1f%%, wall_time=%.1f ms",
+                len(result.output_tokens),
+                result.total_rounds,
+                result.acceptance_rate * 100,
+                result.wall_time_ms,
+            )
 
         return output_text
 
@@ -121,6 +160,12 @@ def main() -> None:
         help="Maximum draft→verify rounds (overrides config)",
     )
     parser.add_argument(
+        "--model-name",
+        type=str,
+        default="gpt2",
+        help="HuggingFace model name for tokenizer (default: gpt2)",
+    )
+    parser.add_argument(
         "--telemetry-output",
         type=str,
         default=None,
@@ -137,7 +182,7 @@ def main() -> None:
     if args.max_rounds is not None:
         config = OrchestratorConfig(max_rounds=args.max_rounds)
 
-    orch = Orchestrator(config=config)
+    orch = Orchestrator(config=config, model_name=args.model_name)
     orch.connect()
     result = orch.run(args.prompt)
 

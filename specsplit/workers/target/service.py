@@ -9,21 +9,48 @@ from __future__ import annotations
 
 import logging
 from concurrent import futures
+from typing import Any
 
 import grpc
 
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import TelemetryLogger
+from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.target.engine import TargetEngine
 
 logger = logging.getLogger(__name__)
 
-# NOTE: Import generated protobuf modules after `make proto`:
-# from specsplit.proto import spec_decoding_pb2
-# from specsplit.proto import spec_decoding_pb2_grpc
+
+# ---------------------------------------------------------------------------
+# Protobuf conversion helpers
+# ---------------------------------------------------------------------------
 
 
-class TargetServiceServicer:
+def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
+    """Recursively convert a protobuf ``TokenNode`` to a plain Python dict.
+
+    The dict format matches what ``TargetEngine.verify_draft_tree`` expects:
+    ``{"token_id": int, "log_prob": float, "children": [...]}``.
+
+    Args:
+        node: A protobuf ``TokenNode`` message.
+
+    Returns:
+        A plain dict representation of the node and its descendants.
+    """
+    return {
+        "token_id": node.token_id,
+        "log_prob": node.log_prob,
+        "children": [_from_proto_node(c) for c in node.children],
+    }
+
+
+# ---------------------------------------------------------------------------
+# gRPC Servicer
+# ---------------------------------------------------------------------------
+
+
+class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
     """gRPC servicer implementing the ``TargetService`` RPC interface.
 
     Handles ``VerifyDrafts`` (with session-based KV caching) and
@@ -42,7 +69,11 @@ class TargetServiceServicer:
         self._engine = engine
         self._telemetry = telemetry or TelemetryLogger(service_name="target-worker")
 
-    def VerifyDrafts(self, request, context):  # noqa: N802
+    def VerifyDrafts(  # noqa: N802
+        self,
+        request: spec_decoding_pb2.VerifyRequest,
+        context: grpc.ServicerContext,
+    ) -> spec_decoding_pb2.VerifyResponse:
         """Handle a ``VerifyDrafts`` RPC call with optional session KV caching.
 
         If ``request.session_id`` is non-empty, the engine reuses (or creates)
@@ -55,22 +86,18 @@ class TargetServiceServicer:
 
         Returns:
             A ``VerifyResponse`` protobuf message with verification results.
-
-        .. todo::
-            Convert protobuf tree to dict, call engine, convert result back.
         """
-        session_id = request.session_id or None
+        session_id: str | None = request.session_id or None
 
         with self._telemetry.span(
             "verify_drafts",
             request_id=request.request_id,
             session_id=session_id or "stateless",
         ):
-            prompt_ids = list(request.prompt_token_ids)
-
-            # TODO(proto-conversion): Convert proto TokenNode → dict tree
-            # draft_tree = [_from_proto_node(n) for n in request.draft_tree]
-            draft_tree: list = []  # Placeholder
+            prompt_ids: list[int] = list(request.prompt_token_ids)
+            draft_tree: list[dict[str, Any]] = [
+                _from_proto_node(n) for n in request.draft_tree
+            ]
 
             result = self._engine.verify_draft_tree(
                 prompt_ids,
@@ -78,16 +105,14 @@ class TargetServiceServicer:
                 session_id=session_id,
             )
 
-            # TODO(proto-conversion): Build and return VerifyResponse
-            # response = spec_decoding_pb2.VerifyResponse(
-            #     request_id=request.request_id,
-            #     accepted_token_ids=result.accepted_token_ids,
-            #     correction_token_id=result.correction_token_id or 0,
-            #     num_accepted=result.num_accepted,
-            #     session_id=session_id or "",
-            #     cache_hit=result.cache_hit,
-            # )
-            # return response
+            response = spec_decoding_pb2.VerifyResponse(
+                request_id=request.request_id,
+                accepted_token_ids=result.accepted_token_ids,
+                correction_token_id=result.correction_token_id or 0,
+                num_accepted=result.num_accepted,
+                session_id=session_id or "",
+                cache_hit=result.cache_hit,
+            )
 
             logger.info(
                 "VerifyDrafts completed: request_id=%s, session=%s, "
@@ -97,8 +122,13 @@ class TargetServiceServicer:
                 result.cache_hit,
                 result.num_accepted,
             )
+            return response
 
-    def EndSession(self, request, context):  # noqa: N802
+    def EndSession(  # noqa: N802
+        self,
+        request: spec_decoding_pb2.EndSessionRequest,
+        context: grpc.ServicerContext,
+    ) -> spec_decoding_pb2.EndSessionResponse:
         """Handle an ``EndSession`` RPC — release a session's KV cache.
 
         Args:
@@ -112,25 +142,28 @@ class TargetServiceServicer:
             "end_session",
             session_id=request.session_id,
         ):
-            was_active = self._engine.end_session(request.session_id)
+            was_active: bool = self._engine.end_session(request.session_id)
 
-            # TODO(proto-conversion): Build and return EndSessionResponse
-            # response = spec_decoding_pb2.EndSessionResponse(
-            #     session_id=request.session_id,
-            #     was_active=was_active,
-            # )
-            # return response
+            response = spec_decoding_pb2.EndSessionResponse(
+                session_id=request.session_id,
+                was_active=was_active,
+            )
 
             logger.info(
                 "EndSession: session=%s, was_active=%s",
                 request.session_id,
                 was_active,
             )
+            return response
 
-    def Ping(self, request, context):  # noqa: N802
+    def Ping(  # noqa: N802
+        self,
+        request: spec_decoding_pb2.PingRequest,
+        context: grpc.ServicerContext,
+    ) -> spec_decoding_pb2.PingResponse:
         """Health check endpoint."""
         logger.debug("Ping received (active_sessions=%d)", self._engine.active_sessions)
-        # return spec_decoding_pb2.PingResponse(status="ok", worker_type="target")
+        return spec_decoding_pb2.PingResponse(status="ok", worker_type="target")
 
 
 def serve(config: TargetWorkerConfig | None = None) -> None:
@@ -138,9 +171,6 @@ def serve(config: TargetWorkerConfig | None = None) -> None:
 
     Args:
         config: Optional configuration override.
-
-    .. todo::
-        Register the servicer with the generated gRPC server class.
     """
     config = config or TargetWorkerConfig()
     engine = TargetEngine(config=config)
@@ -148,9 +178,8 @@ def serve(config: TargetWorkerConfig | None = None) -> None:
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=config.max_workers))
 
-    # TODO(grpc-registration): Uncomment after `make proto`:
-    # servicer = TargetServiceServicer(engine)
-    # spec_decoding_pb2_grpc.add_TargetServiceServicer_to_server(servicer, server)
+    servicer = TargetServiceServicer(engine)
+    spec_decoding_pb2_grpc.add_TargetServiceServicer_to_server(servicer, server)
 
     bind_address = f"[::]:{config.grpc_port}"
     server.add_insecure_port(bind_address)
