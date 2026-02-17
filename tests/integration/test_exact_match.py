@@ -20,7 +20,7 @@ Usage::
 from __future__ import annotations
 
 import uuid
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 import pytest
@@ -292,7 +292,7 @@ class MockOrchestrator:
             # 3. Extend with accepted tokens (includes bonus if all accepted)
             new_tokens = verify_resp.accepted_token_ids
             if verify_resp.correction_token_id is not None:
-                new_tokens = list(new_tokens) + [verify_resp.correction_token_id]
+                new_tokens = [*new_tokens, verify_resp.correction_token_id]
 
             if not new_tokens:
                 break  # safety: nothing accepted, nothing corrected

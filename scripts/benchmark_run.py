@@ -3,7 +3,7 @@
 Reads a JSONL file of prompts (e.g. a ShareGPT slice), drives the SpecSplit
 orchestrator for each prompt, and records per-request metrics to CSV. Supports
 sweeping over multiple *Gamma* (draft tree depth) values so you can evaluate
-the throughput–acceptance-rate trade-off in a single invocation.
+the throughput-acceptance-rate trade-off in a single invocation.
 
 Usage::
 
@@ -34,12 +34,11 @@ import json
 import logging
 import statistics
 import sys
-import time
 import uuid
-from dataclasses import asdict, dataclass, field
+from dataclasses import dataclass
 from pathlib import Path
 
-from specsplit.core.config import DraftWorkerConfig, OrchestratorConfig
+from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.workers.orchestrator.client import Orchestrator
 
@@ -77,7 +76,7 @@ class RequestMetrics:
         tpot_ms:  Time-Per-Output-Token (ms) — average inter-token latency
             across all generated tokens (total / generated_tokens).
         average_acceptance_rate:  Mean fraction of draft tokens accepted
-            per verification round (0.0–1.0).
+            per verification round (0.0-1.0).
         total_network_idle_ms:  Cumulative time (ms) the orchestrator
             spent waiting on gRPC round-trips (network latency overhead).
         total_latency_ms:  Wall clock time (ms) for the entire request.
@@ -153,7 +152,7 @@ class BenchmarkOrchestrator:
         round_metrics: list[dict] = []
         first_token_time: float | None = None
         total_net_idle = 0.0
-        total_generated = 0
+
 
         # --------------- round loop (instrumented) ---------------
         # TODO(real-pipeline): Replace with per-round instrumentation once

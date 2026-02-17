@@ -15,14 +15,13 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
-import sys
 from typing import Any
 
 import grpc
 
 from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import TelemetryLogger
-from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
+from specsplit.proto import spec_decoding_pb2_grpc
 from specsplit.workers.orchestrator.pipeline import (
     PipelineResult,
     run_speculative_loop_async,

@@ -2,9 +2,8 @@
 
 from __future__ import annotations
 
-import os
-
 import pytest
+from pydantic import ValidationError
 
 from specsplit.core.config import DraftWorkerConfig, OrchestratorConfig, TargetWorkerConfig
 
@@ -12,8 +11,15 @@ from specsplit.core.config import DraftWorkerConfig, OrchestratorConfig, TargetW
 class TestDraftWorkerConfig:
     """Tests for DraftWorkerConfig defaults and env overrides."""
 
-    def test_defaults(self):
+    def test_defaults(self, monkeypatch: pytest.MonkeyPatch):
         """Default values should be sensible."""
+        # Clear any env overrides so we test the true Field defaults.
+        monkeypatch.delenv("SPECSPLIT_DRAFT_MODEL_NAME", raising=False)
+        monkeypatch.delenv("SPECSPLIT_DRAFT_DEVICE", raising=False)
+        monkeypatch.delenv("SPECSPLIT_DRAFT_MAX_DRAFT_TOKENS", raising=False)
+        monkeypatch.delenv("SPECSPLIT_DRAFT_TEMPERATURE", raising=False)
+        monkeypatch.delenv("SPECSPLIT_DRAFT_GRPC_PORT", raising=False)
+
         cfg = DraftWorkerConfig()
         assert cfg.model_name == "gpt2"
         assert cfg.device == "cuda:0"
@@ -34,10 +40,10 @@ class TestDraftWorkerConfig:
 
     def test_validation_max_draft_tokens(self):
         """max_draft_tokens should respect ge=1, le=64 bounds."""
-        with pytest.raises(Exception):  # Pydantic ValidationError
+        with pytest.raises(ValidationError):
             DraftWorkerConfig(max_draft_tokens=0)
 
-        with pytest.raises(Exception):
+        with pytest.raises(ValidationError):
             DraftWorkerConfig(max_draft_tokens=100)
 
 

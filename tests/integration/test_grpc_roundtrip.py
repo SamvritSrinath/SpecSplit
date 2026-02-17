@@ -12,7 +12,6 @@ Usage::
 from __future__ import annotations
 
 from concurrent import futures
-from typing import Any
 from unittest.mock import MagicMock
 
 import grpc
