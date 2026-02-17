@@ -5,9 +5,10 @@ speculative token trees of depth *K*. These trees are sent to the Target
 Worker for verification.
 
 Architecture Notes:
-    - Maintains a local KV cache across rounds to avoid recomputing the
-      prefix. The cache is invalidated when the orchestrator signals a
-      new prompt or a mismatch.
+    - Cross-round KV cache reuse is planned but not yet implemented;
+      each call currently recomputes the full prompt prefix. The
+      ``_kv_cache`` / ``reset_cache()`` plumbing is retained for the
+      future implementation.
     - Token trees are represented as nested lists of ``TokenNode``-like
       dicts for easy protobuf conversion.
 """
@@ -82,10 +83,14 @@ class DraftEngine:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.float16,
-        ).to(self.device).eval()
+        self._model = (
+            AutoModelForCausalLM.from_pretrained(
+                self.config.model_name,
+                torch_dtype=torch.float16,
+            )
+            .to(self.device)
+            .eval()
+        )
 
         self._is_loaded = True
         logger.info("Draft model loaded: %s on %s", self.config.model_name, self.device)
@@ -173,9 +178,7 @@ class DraftEngine:
 
                     token_id_int = next_token_id.item()
                     # Log probability of the chosen token
-                    log_prob = math.log(
-                        probs[0, token_id_int].item() + 1e-10
-                    )
+                    log_prob = math.log(probs[0, token_id_int].item() + 1e-10)
                     chain.append((token_id_int, log_prob))
 
                     # Forward pass for the next step with KV cache

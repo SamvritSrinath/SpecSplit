@@ -17,8 +17,9 @@ tests/
 │   ├── test_draft_engine.py        #   DraftEngine init + stub generation
 │   └── test_target_engine.py       #   Session caching, rollback, verification
 └── integration/                    # Requires transformers + torch
-    ├── test_grpc_roundtrip.py      #   End-to-end gRPC smoke test (stubbed)
-    └── test_exact_match.py         #   Speculative vs standard generation
+    ├── test_grpc_roundtrip.py      #   gRPC service binding smoke tests
+    ├── test_exact_match.py         #   Speculative vs standard generation
+    └── test_e2e.py                 #   Full gRPC end-to-end exact-match validation
 ```
 
 ---
@@ -29,8 +30,12 @@ tests/
 
 ```bash
 make test
-# or equivalently:
-pytest -v
+# runs unit tests only (tests/unit/):
+pytest tests/unit/ -v --tb=short
+
+make test-all
+# runs all tests including integration:
+pytest tests/ -v --tb=short
 ```
 
 ### Unit Tests Only (fast, no GPU)
@@ -86,6 +91,7 @@ GPU.  These must run in < 5 seconds total.
 |------|---------------|
 | `test_exact_match.py` | Loads Qwen2.5-0.5B as both draft and target. Asserts speculative decoding output is **byte-identical** to `model.generate()`. Tests multiple prompts, varying gamma (K=1,3,5,10), and edge cases. Uses mock gRPC stubs (no ports). |
 | `test_grpc_roundtrip.py` | Smoke test for the gRPC service bindings (currently stubbed). |
+| `test_e2e.py` | Full end-to-end gRPC validation. Spins up real Draft and Target gRPC servers on ephemeral ports, runs the orchestrator pipeline, and asserts output is byte-identical to `model.generate()`. |
 
 ---
 
@@ -192,4 +198,5 @@ The test suite is designed to run in two stages:
 2. **Full validation** (`pytest -v`) — runs on PR merge or nightly, includes
    model download + integration tests.
 
-The `Makefile` target `make test` runs both stages sequentially.
+The `Makefile` target `make test` runs the fast gate; use `make test-all`
+for the full suite.

@@ -125,13 +125,9 @@ class LocalDraftEngine:
             lp = torch.log_softmax(logits, dim=-1)[tok].item()
             drafted.append(tok)
             log_probs.append(lp)
-            input_ids = torch.cat(
-                [input_ids, torch.tensor([[tok]], device=self.device)], dim=1
-            )
+            input_ids = torch.cat([input_ids, torch.tensor([[tok]], device=self.device)], dim=1)
 
-        return MockDraftResponse(
-            request_id="", draft_token_ids=drafted, draft_log_probs=log_probs
-        )
+        return MockDraftResponse(request_id="", draft_token_ids=drafted, draft_log_probs=log_probs)
 
 
 class LocalTargetEngine:
@@ -179,9 +175,7 @@ class LocalTargetEngine:
         # Rebuild session KV cache for the accepted prefix only
         if req.session_id:
             prefix_len = n + len(accepted)
-            prefix_ids = torch.tensor(
-                [prompt + accepted], device=self.device
-            )
+            prefix_ids = torch.tensor([prompt + accepted], device=self.device)
             cache_out = self.model(prefix_ids, use_cache=True)
             self._caches[req.session_id] = (
                 cache_out.past_key_values,
@@ -192,7 +186,7 @@ class LocalTargetEngine:
             request_id=req.request_id,
             accepted_token_ids=accepted,
             correction_token_id=correction,
-            num_accepted=len([t for t in accepted if t in drafts[:len(accepted)]]),
+            num_accepted=len([t for t in accepted if t in drafts[: len(accepted)]]),
             cache_hit=req.session_id in self._caches,
         )
 
@@ -316,10 +310,14 @@ class MockOrchestrator:
 def model_and_tokenizer():
     """Load model + tokenizer once for the entire test module."""
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.float32,  # float32 for CPU determinism
-    ).to("cpu").eval()
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.float32,  # float32 for CPU determinism
+        )
+        .to("cpu")
+        .eval()
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -352,7 +350,7 @@ def baseline_generate(model, tokenizer, prompt: str, max_new_tokens: int) -> str
             max_new_tokens=max_new_tokens,
             do_sample=False,
         )
-    return tokenizer.decode(out_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
+    return tokenizer.decode(out_ids[0, input_ids.shape[1] :], skip_special_tokens=True)
 
 
 def specsplit_generate(
@@ -371,7 +369,7 @@ def specsplit_generate(
     )
     prompt_ids = tokenizer.encode(prompt)
     full_ids = orch.run(prompt_ids, max_new_tokens=max_new_tokens, draft_k=draft_k)
-    new_ids = full_ids[len(prompt_ids): len(prompt_ids) + max_new_tokens]
+    new_ids = full_ids[len(prompt_ids) : len(prompt_ids) + max_new_tokens]
     return tokenizer.decode(new_ids, skip_special_tokens=True)
 
 
@@ -392,28 +390,20 @@ class TestExactMatch:
         speculative = specsplit_generate(mock_stubs, tokenizer, prompt, MAX_NEW_TOKENS)
 
         assert speculative == baseline, (
-            f"Output mismatch!\n"
-            f"  Baseline:    {baseline!r}\n"
-            f"  Speculative: {speculative!r}"
+            f"Output mismatch!\n  Baseline:    {baseline!r}\n  Speculative: {speculative!r}"
         )
 
     @pytest.mark.parametrize("k", [1, 3, 5, 10], ids=lambda k: f"k={k}")
-    def test_exact_match_varying_draft_depth(
-        self, model_and_tokenizer, mock_stubs, k: int
-    ):
+    def test_exact_match_varying_draft_depth(self, model_and_tokenizer, mock_stubs, k: int):
         """Exact match must hold regardless of draft depth K."""
         model, tokenizer = model_and_tokenizer
         prompt = PROMPTS[0]
 
         baseline = baseline_generate(model, tokenizer, prompt, MAX_NEW_TOKENS)
-        speculative = specsplit_generate(
-            mock_stubs, tokenizer, prompt, MAX_NEW_TOKENS, draft_k=k
-        )
+        speculative = specsplit_generate(mock_stubs, tokenizer, prompt, MAX_NEW_TOKENS, draft_k=k)
 
         assert speculative == baseline, (
-            f"Mismatch at k={k}!\n"
-            f"  Baseline:    {baseline!r}\n"
-            f"  Speculative: {speculative!r}"
+            f"Mismatch at k={k}!\n  Baseline:    {baseline!r}\n  Speculative: {speculative!r}"
         )
 
     def test_short_generation(self, model_and_tokenizer, mock_stubs):
@@ -422,9 +412,7 @@ class TestExactMatch:
         prompt = PROMPTS[0]
 
         baseline = baseline_generate(model, tokenizer, prompt, max_new_tokens=3)
-        speculative = specsplit_generate(
-            mock_stubs, tokenizer, prompt, max_new_tokens=3, draft_k=5
-        )
+        speculative = specsplit_generate(mock_stubs, tokenizer, prompt, max_new_tokens=3, draft_k=5)
 
         assert speculative == baseline
 
@@ -437,9 +425,9 @@ class TestExactMatch:
         # Baseline token IDs
         input_t = torch.tensor([prompt_ids])
         with torch.no_grad():
-            baseline_ids = model.generate(
-                input_t, max_new_tokens=MAX_NEW_TOKENS, do_sample=False
-            )[0].tolist()
+            baseline_ids = model.generate(input_t, max_new_tokens=MAX_NEW_TOKENS, do_sample=False)[
+                0
+            ].tolist()
 
         # Speculative token IDs
         draft_stub, target_stub = mock_stubs
@@ -505,6 +493,5 @@ class TestMockGRPCBoundary:
         )
         # Very unlikely all garbage tokens match greedy prediction
         assert (
-            verify_resp.correction_token_id is not None
-            or len(verify_resp.accepted_token_ids) <= 3
+            verify_resp.correction_token_id is not None or len(verify_resp.accepted_token_ids) <= 3
         )

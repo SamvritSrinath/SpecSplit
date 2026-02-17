@@ -122,12 +122,12 @@ class Orchestrator:
             )
 
             output_text = tokenizer.decode(
-                result.output_tokens, skip_special_tokens=True,
+                result.output_tokens,
+                skip_special_tokens=True,
             )
 
             logger.info(
-                "Pipeline complete: %d tokens in %d rounds, "
-                "acceptance=%.1f%%, wall_time=%.1f ms",
+                "Pipeline complete: %d tokens in %d rounds, acceptance=%.1f%%, wall_time=%.1f ms",
                 len(result.output_tokens),
                 result.total_rounds,
                 result.acceptance_rate * 100,
@@ -185,9 +185,9 @@ def main() -> None:
     orch.connect()
     result = orch.run(args.prompt)
 
-    print(f"\n{'='*60}")
+    print(f"\n{'=' * 60}")
     print("Generated Output:")
-    print(f"{'='*60}")
+    print(f"{'=' * 60}")
     print(result)
 
     if args.telemetry_output:

@@ -38,7 +38,7 @@ COPY scripts/ scripts/
 
 # ---- Install the package + all dependencies ----
 # Using --verbose so we can see what pip is actually doing
-RUN python -m pip install --no-cache-dir ".[dev]" \
+RUN python -m pip install --no-cache-dir "." \
     && python -c "import torch; import pydantic; import grpc_tools; print('All core deps OK')"
 
 # ---- Compile protobuf stubs ----
@@ -47,7 +47,10 @@ RUN python -m grpc_tools.protoc \
         --python_out=specsplit/proto \
         --grpc_python_out=specsplit/proto \
         --mypy_out=specsplit/proto \
-        specsplit/proto/spec_decoding.proto
+        specsplit/proto/spec_decoding.proto \
+    && sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+        specsplit/proto/spec_decoding_pb2_grpc.py \
+    && python -c "from specsplit.proto import spec_decoding_pb2_grpc; print('Proto import OK')"
 
 # ---------------------------------------------------------------------------
 # Stage 2: Runtime — lean image with only what's needed to serve

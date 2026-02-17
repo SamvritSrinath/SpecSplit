@@ -115,5 +115,11 @@ class OrchestratorConfig(BaseSettings):
         ge=1,
         description="Maximum total tokens to generate per prompt.",
     )
+    max_draft_tokens: int = Field(
+        default=5,
+        ge=1,
+        le=64,
+        description="Draft tree depth (K / gamma) forwarded to the Draft Worker.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}

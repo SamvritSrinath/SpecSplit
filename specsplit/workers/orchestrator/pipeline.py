@@ -202,7 +202,7 @@ async def _call_generate_drafts(
     request = spec_decoding_pb2.DraftRequest(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
-        max_draft_len=5,  # default draft depth
+        max_draft_len=config.max_draft_tokens,
     )
 
     response = draft_stub.GenerateDrafts(request)
@@ -215,7 +215,9 @@ async def _call_generate_drafts(
     token_ids, topology_map = _flatten_proto_tree(proto_nodes)
 
     logger.debug(
-        "Draft RPC completed: round=%d, tokens=%d", round_idx, len(token_ids),
+        "Draft RPC completed: round=%d, tokens=%d",
+        round_idx,
+        len(token_ids),
     )
     return DraftTree(
         token_ids=token_ids,
@@ -366,9 +368,10 @@ async def run_speculative_loop_async(
     # Phase 0: Generate the first draft tree (no overlap possible here)
     # ------------------------------------------------------------------
     logger.info(
-        "Starting speculative loop: prompt_len=%d, max_rounds=%d, "
-        "max_output=%d",
-        len(prompt_ids), cfg.max_rounds, cfg.max_output_tokens,
+        "Starting speculative loop: prompt_len=%d, max_rounds=%d, max_output=%d",
+        len(prompt_ids),
+        cfg.max_rounds,
+        cfg.max_output_tokens,
     )
 
     current_context = list(prompt_ids)
@@ -378,7 +381,11 @@ async def run_speculative_loop_async(
 
     with telemetry.span("initial_draft", round_idx=0):
         current_draft = await _call_generate_drafts(
-            draft_stub, prompt_ids, current_context, cfg, round_idx=0,
+            draft_stub,
+            prompt_ids,
+            current_context,
+            cfg,
+            round_idx=0,
         )
 
     # ------------------------------------------------------------------
@@ -412,14 +419,21 @@ async def run_speculative_loop_async(
         # Create concurrent tasks
         verify_task = asyncio.create_task(
             _call_verify_drafts(
-                target_stub, prompt_ids, current_draft, session_id, cfg,
+                target_stub,
+                prompt_ids,
+                current_draft,
+                session_id,
+                cfg,
             )
         )
 
         # Speculatively draft N+1 while N is being verified
         speculative_draft_task = asyncio.create_task(
             _call_generate_drafts(
-                draft_stub, prompt_ids, speculative_context, cfg,
+                draft_stub,
+                prompt_ids,
+                speculative_context,
+                cfg,
                 round_idx=round_idx + 1,
             )
         )
@@ -456,7 +470,7 @@ async def run_speculative_loop_async(
             # Truncate at EOS
             try:
                 eos_pos = state.generated_tokens.index(eos_token_id)
-                state.generated_tokens = state.generated_tokens[:eos_pos + 1]
+                state.generated_tokens = state.generated_tokens[: eos_pos + 1]
             except ValueError:
                 pass
             state.is_finished = True
@@ -478,10 +492,9 @@ async def run_speculative_loop_async(
         # If the actual accepted prefix matches our assumption, the
         # speculative draft N+1 is valid and can be used directly.
         actual_accepted = list(verify_result.accepted_tokens)
-        speculation_correct = (
-            actual_accepted == speculative_assumption[:len(actual_accepted)]
-            and len(actual_accepted) == len(speculative_assumption)
-        )
+        speculation_correct = actual_accepted == speculative_assumption[
+            : len(actual_accepted)
+        ] and len(actual_accepted) == len(speculative_assumption)
 
         if speculation_correct:
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
@@ -493,8 +506,7 @@ async def run_speculative_loop_async(
             # from an incorrect context.  Discard it and re-draft.
             state.speculation_misses += 1
             logger.debug(
-                "Speculation MISS at round %d — discarding draft N+1 "
-                "(accepted %d/%d assumed)",
+                "Speculation MISS at round %d — discarding draft N+1 (accepted %d/%d assumed)",
                 round_idx,
                 len(actual_accepted),
                 len(speculative_assumption),
@@ -506,7 +518,10 @@ async def run_speculative_loop_async(
             # Re-draft from the CORRECTED context
             with telemetry.span("re_draft", round_idx=round_idx):
                 current_draft = await _call_generate_drafts(
-                    draft_stub, prompt_ids, current_context, cfg,
+                    draft_stub,
+                    prompt_ids,
+                    current_context,
+                    cfg,
                     round_idx=round_idx + 1,
                 )
             speculative_draft = None
@@ -517,14 +532,8 @@ async def run_speculative_loop_async(
     pipeline_sw.stop()
 
     total_spec = state.speculation_hits + state.speculation_misses
-    spec_hit_rate = (
-        state.speculation_hits / total_spec if total_spec > 0 else 0.0
-    )
-    acceptance_rate = (
-        state.total_accepted / state.total_drafted
-        if state.total_drafted > 0
-        else 0.0
-    )
+    spec_hit_rate = state.speculation_hits / total_spec if total_spec > 0 else 0.0
+    acceptance_rate = state.total_accepted / state.total_drafted if state.total_drafted > 0 else 0.0
 
     result = PipelineResult(
         output_tokens=state.generated_tokens,

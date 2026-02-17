@@ -153,7 +153,6 @@ class BenchmarkOrchestrator:
         first_token_time: float | None = None
         total_net_idle = 0.0
 
-
         # --------------- round loop (instrumented) ---------------
         # TODO(real-pipeline): Replace with per-round instrumentation once
         # the orchestrator exposes round-level hooks.  Currently the stub
@@ -197,9 +196,7 @@ class BenchmarkOrchestrator:
 
         # ---- Compute aggregate metrics ----
         if round_metrics:
-            avg_acceptance = statistics.mean(
-                r["acceptance_rate"] for r in round_metrics
-            )
+            avg_acceptance = statistics.mean(r["acceptance_rate"] for r in round_metrics)
         else:
             avg_acceptance = 0.0
 
@@ -351,7 +348,7 @@ def main() -> None:
         "--dataset",
         type=str,
         required=True,
-        help="Path to JSONL dataset file (each line: {\"prompt\": \"...\"})",
+        help='Path to JSONL dataset file (each line: {"prompt": "..."})',
     )
     parser.add_argument(
         "--output",
@@ -414,9 +411,7 @@ def main() -> None:
     all_metrics: list[RequestMetrics] = []
 
     for gamma in sorted(args.gamma):
-        logger.info(
-            "=== Starting sweep: gamma=%d (%d prompts) ===", gamma, len(dataset)
-        )
+        logger.info("=== Starting sweep: gamma=%d (%d prompts) ===", gamma, len(dataset))
 
         bench_orch = BenchmarkOrchestrator(config=base_config, gamma=gamma)
         bench_orch.connect()

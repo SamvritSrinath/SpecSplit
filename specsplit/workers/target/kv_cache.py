@@ -99,12 +99,20 @@ class StaticKVCache:
         # Shape: [num_layers, batch_size, num_heads, max_seq_len, head_dim]
         # -----------------------------------------------------------------
         self.key_cache: torch.Tensor = torch.zeros(
-            num_layers, batch_size, num_heads, max_seq_len, head_dim,
+            num_layers,
+            batch_size,
+            num_heads,
+            max_seq_len,
+            head_dim,
             dtype=dtype,
             device=self.device,
         )
         self.value_cache: torch.Tensor = torch.zeros(
-            num_layers, batch_size, num_heads, max_seq_len, head_dim,
+            num_layers,
+            batch_size,
+            num_heads,
+            max_seq_len,
+            head_dim,
             dtype=dtype,
             device=self.device,
         )
@@ -120,8 +128,13 @@ class StaticKVCache:
         logger.info(
             "StaticKVCache allocated: layers=%d, heads=%d, max_seq=%d, "
             "head_dim=%d, dtype=%s, device=%s, memory=%.1f MB",
-            num_layers, num_heads, max_seq_len, head_dim,
-            dtype, self.device, mem_mb,
+            num_layers,
+            num_heads,
+            max_seq_len,
+            head_dim,
+            dtype,
+            self.device,
+            mem_mb,
         )
 
     # ------------------------------------------------------------------ #
@@ -172,8 +185,13 @@ class StaticKVCache:
         # Shape assertion: new_keys should be
         #   [num_layers, batch_size, num_heads, new_len, head_dim]
 
-        if new_keys.shape != (self.num_layers, self.batch_size, self.num_heads,
-                              new_len, self.head_dim):
+        if new_keys.shape != (
+            self.num_layers,
+            self.batch_size,
+            self.num_heads,
+            new_len,
+            self.head_dim,
+        ):
             raise ValueError(
                 f"new_keys shape {tuple(new_keys.shape)} doesn't match cache "
                 f"config: expected [{self.num_layers}, {self.batch_size}, "
@@ -196,15 +214,17 @@ class StaticKVCache:
 
         # In-place slice assignment — no allocation, no copy
         # Target region: [:, :, :, seq_len:seq_len+new_len, :]
-        self.key_cache[:, :, :, self._seq_len:end, :] = new_keys
-        self.value_cache[:, :, :, self._seq_len:end, :] = new_values
+        self.key_cache[:, :, :, self._seq_len : end, :] = new_keys
+        self.value_cache[:, :, :, self._seq_len : end, :] = new_values
 
         old_len = self._seq_len
         self._seq_len = end
 
         logger.debug(
             "KV cache append: %d → %d positions (+%d new)",
-            old_len, self._seq_len, new_len,
+            old_len,
+            self._seq_len,
+            new_len,
         )
 
     # ------------------------------------------------------------------ #
@@ -230,13 +250,10 @@ class StaticKVCache:
                 the current ``seq_len``.
         """
         if accepted_length < 0:
-            raise ValueError(
-                f"accepted_length must be >= 0, got {accepted_length}"
-            )
+            raise ValueError(f"accepted_length must be >= 0, got {accepted_length}")
         if accepted_length > self._seq_len:
             raise ValueError(
-                f"accepted_length ({accepted_length}) exceeds current "
-                f"seq_len ({self._seq_len})"
+                f"accepted_length ({accepted_length}) exceeds current seq_len ({self._seq_len})"
             )
 
         if accepted_length == self._seq_len:
@@ -249,7 +266,9 @@ class StaticKVCache:
 
         logger.debug(
             "KV cache rollback: %d → %d positions (freed %d)",
-            old_len, self._seq_len, old_len - self._seq_len,
+            old_len,
+            self._seq_len,
+            old_len - self._seq_len,
         )
 
     # ------------------------------------------------------------------ #
@@ -277,15 +296,12 @@ class StaticKVCache:
             IndexError: If ``layer_idx`` is out of range.
         """
         if layer_idx < 0 or layer_idx >= self.num_layers:
-            raise IndexError(
-                f"layer_idx {layer_idx} out of range "
-                f"[0, {self.num_layers})"
-            )
+            raise IndexError(f"layer_idx {layer_idx} out of range [0, {self.num_layers})")
 
         # Return a VIEW into the pre-allocated buffer — no copy.
         # Shape: [batch, num_heads, seq_len, head_dim]
-        key = self.key_cache[layer_idx, :, :, :self._seq_len, :]
-        value = self.value_cache[layer_idx, :, :, :self._seq_len, :]
+        key = self.key_cache[layer_idx, :, :, : self._seq_len, :]
+        value = self.value_cache[layer_idx, :, :, : self._seq_len, :]
         return key, value
 
     def get_all_kv(

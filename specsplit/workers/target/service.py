@@ -95,9 +95,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             session_id=session_id or "stateless",
         ):
             prompt_ids: list[int] = list(request.prompt_token_ids)
-            draft_tree: list[dict[str, Any]] = [
-                _from_proto_node(n) for n in request.draft_tree
-            ]
+            draft_tree: list[dict[str, Any]] = [_from_proto_node(n) for n in request.draft_tree]
 
             result = self._engine.verify_draft_tree(
                 prompt_ids,
@@ -115,8 +113,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             )
 
             logger.info(
-                "VerifyDrafts completed: request_id=%s, session=%s, "
-                "cache_hit=%s, accepted=%d",
+                "VerifyDrafts completed: request_id=%s, session=%s, cache_hit=%s, accepted=%d",
                 request.request_id,
                 session_id or "none",
                 result.cache_hit,

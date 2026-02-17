@@ -112,9 +112,7 @@ class TestGRPCRoundtrip:
         _server, port = draft_server
         with grpc.insecure_channel(f"localhost:{port}") as channel:
             stub = spec_decoding_pb2_grpc.DraftServiceStub(channel)
-            response: spec_decoding_pb2.PingResponse = stub.Ping(
-                spec_decoding_pb2.PingRequest()
-            )
+            response: spec_decoding_pb2.PingResponse = stub.Ping(spec_decoding_pb2.PingRequest())
 
         assert response.status == "ok"
         assert response.worker_type == "draft"
@@ -124,9 +122,7 @@ class TestGRPCRoundtrip:
         _server, port = target_server
         with grpc.insecure_channel(f"localhost:{port}") as channel:
             stub = spec_decoding_pb2_grpc.TargetServiceStub(channel)
-            response: spec_decoding_pb2.PingResponse = stub.Ping(
-                spec_decoding_pb2.PingRequest()
-            )
+            response: spec_decoding_pb2.PingResponse = stub.Ping(spec_decoding_pb2.PingRequest())
 
         assert response.status == "ok"
         assert response.worker_type == "target"
@@ -149,13 +145,11 @@ class TestGRPCRoundtrip:
         # -- Step 1: Generate drafts -----------------------------------------
         with grpc.insecure_channel(f"localhost:{draft_port}") as draft_channel:
             draft_stub = spec_decoding_pb2_grpc.DraftServiceStub(draft_channel)
-            draft_response: spec_decoding_pb2.DraftResponse = (
-                draft_stub.GenerateDrafts(
-                    spec_decoding_pb2.DraftRequest(
-                        request_id="roundtrip-001",
-                        prompt_token_ids=[1, 2, 3],
-                        max_draft_len=2,
-                    )
+            draft_response: spec_decoding_pb2.DraftResponse = draft_stub.GenerateDrafts(
+                spec_decoding_pb2.DraftRequest(
+                    request_id="roundtrip-001",
+                    prompt_token_ids=[1, 2, 3],
+                    max_draft_len=2,
                 )
             )
 
@@ -164,20 +158,16 @@ class TestGRPCRoundtrip:
         # -- Step 2: Forward draft tree to target for verification -----------
         with grpc.insecure_channel(f"localhost:{target_port}") as target_channel:
             target_stub = spec_decoding_pb2_grpc.TargetServiceStub(target_channel)
-            verify_response: spec_decoding_pb2.VerifyResponse = (
-                target_stub.VerifyDrafts(
-                    spec_decoding_pb2.VerifyRequest(
-                        request_id="roundtrip-001",
-                        prompt_token_ids=[1, 2, 3],
-                        draft_tree=draft_response.draft_tree,
-                        session_id="sess-roundtrip",
-                    )
+            verify_response: spec_decoding_pb2.VerifyResponse = target_stub.VerifyDrafts(
+                spec_decoding_pb2.VerifyRequest(
+                    request_id="roundtrip-001",
+                    prompt_token_ids=[1, 2, 3],
+                    draft_tree=draft_response.draft_tree,
+                    session_id="sess-roundtrip",
                 )
             )
 
         # -- Step 3: Assert verification results ----------------------------
-        assert verify_response.num_accepted > 0, (
-            "Target service accepted zero tokens"
-        )
+        assert verify_response.num_accepted > 0, "Target service accepted zero tokens"
         assert len(verify_response.accepted_token_ids) > 0
         assert verify_response.request_id == "roundtrip-001"

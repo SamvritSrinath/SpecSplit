@@ -57,6 +57,7 @@ def _make_mock_target_model(
     model = MagicMock()
     model.dtype = torch.float16
     model.eval.return_value = model
+    model.to.return_value = model
 
     accept_list = accept_tokens or []
 
@@ -82,8 +83,7 @@ def _make_mock_target_model(
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8))
-            for _ in range(2)
+            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
         )
 
         out = MagicMock()
@@ -114,21 +114,35 @@ class TestFlattenTree:
 
     def test_single_chain(self) -> None:
         """A linear chain should flatten to sequential indices."""
-        tree = [{"token_id": 10, "log_prob": -0.1, "children": [
-            {"token_id": 20, "log_prob": -0.2, "children": [
-                {"token_id": 30, "log_prob": -0.3, "children": []}
-            ]}
-        ]}]
+        tree = [
+            {
+                "token_id": 10,
+                "log_prob": -0.1,
+                "children": [
+                    {
+                        "token_id": 20,
+                        "log_prob": -0.2,
+                        "children": [{"token_id": 30, "log_prob": -0.3, "children": []}],
+                    }
+                ],
+            }
+        ]
         token_ids, topology = _flatten_tree(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 1]
 
     def test_branching_tree(self) -> None:
         """A tree with branching should produce correct parent indices."""
-        tree = [{"token_id": 10, "log_prob": -0.1, "children": [
-            {"token_id": 20, "log_prob": -0.2, "children": []},
-            {"token_id": 30, "log_prob": -0.3, "children": []},
-        ]}]
+        tree = [
+            {
+                "token_id": 10,
+                "log_prob": -0.1,
+                "children": [
+                    {"token_id": 20, "log_prob": -0.2, "children": []},
+                    {"token_id": 30, "log_prob": -0.3, "children": []},
+                ],
+            }
+        ]
         token_ids, topology = _flatten_tree(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 0]
@@ -473,9 +487,7 @@ class TestVerifyWithMockedModel:
         engine.load_model()
 
         tree = self._make_tree(draft_ids)
-        engine.verify_draft_tree(
-            prompt_ids=prompt_ids, draft_tree=tree, session_id="sess-A"
-        )
+        engine.verify_draft_tree(prompt_ids=prompt_ids, draft_tree=tree, session_id="sess-A")
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             draft_tree=self._make_tree([20]),

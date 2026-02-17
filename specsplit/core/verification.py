@@ -239,9 +239,7 @@ def verify_greedy_tree(
     # ------------------------------------------------------------------
     # Step 6: Extract results
     # ------------------------------------------------------------------
-    accepted_tokens: list[int] = [
-        draft_tokens[idx].item() for idx in best_path
-    ]
+    accepted_tokens: list[int] = [draft_tokens[idx].item() for idx in best_path]
 
     # Bonus token: the target's greedy choice at the divergence point.
     # - If the path ended at a rejection: bonus = target's choice there.
@@ -265,8 +263,7 @@ def verify_greedy_tree(
     )
 
     logger.debug(
-        "Greedy verification: %d/%d accepted (%.1f%%), "
-        "bonus_token=%d, leaf_idx=%d",
+        "Greedy verification: %d/%d accepted (%.1f%%), bonus_token=%d, leaf_idx=%d",
         result.num_accepted,
         num_tree_nodes,
         result.acceptance_rate * 100,

@@ -125,8 +125,7 @@ def build_tree_attention(
         while cur != -1:
             if cur in visited:
                 raise ValueError(
-                    f"Cycle detected in topology_map at node {i}: "
-                    f"revisited node {cur}"
+                    f"Cycle detected in topology_map at node {i}: revisited node {cur}"
                 )
             if cur < -1 or cur >= num_tree_nodes:
                 raise ValueError(
@@ -184,9 +183,7 @@ def build_tree_attention(
     # Shape: [total_len]
 
     if prefix_length > 0:
-        position_ids[:prefix_length] = torch.arange(
-            prefix_length, dtype=torch.long, device=device
-        )
+        position_ids[:prefix_length] = torch.arange(prefix_length, dtype=torch.long, device=device)
 
     for i in range(num_tree_nodes):
         position_ids[prefix_length + i] = prefix_length + depths[i]
@@ -204,8 +201,7 @@ def build_tree_attention(
     # Shape: [1, total_len]
 
     logger.debug(
-        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, "
-        "depths=%s",
+        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, depths=%s",
         prefix_length,
         num_tree_nodes,
         total_len,

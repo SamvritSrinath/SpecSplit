@@ -80,6 +80,13 @@ jobs:
           test -f specsplit/proto/spec_decoding_pb2_grpc.py
           echo "✓ Proto stubs generated successfully"
 
+      - name: Patch grpc imports and smoke-test import
+        run: |
+          sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+            specsplit/proto/spec_decoding_pb2_grpc.py
+          pip install grpcio>=1.60.0 protobuf>=4.25.0 --no-cache-dir
+          python -c "from specsplit.proto import spec_decoding_pb2_grpc; print('✓ Proto import smoke-test passed')"
+
   # ---------------------------------------------------------------------------
   # Job 3: Unit tests with lightweight models
   # ---------------------------------------------------------------------------
@@ -128,6 +135,8 @@ jobs:
             --grpc_python_out=specsplit/proto \
             --mypy_out=specsplit/proto \
             specsplit/proto/spec_decoding.proto
+          sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+            specsplit/proto/spec_decoding_pb2_grpc.py
 
       - name: Run unit tests
         run: pytest tests/unit/ -v --tb=short -x

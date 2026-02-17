@@ -20,6 +20,7 @@ Architecture Notes:
 from __future__ import annotations
 
 import logging
+from collections import deque
 from dataclasses import dataclass
 from typing import Any
 
@@ -101,13 +102,13 @@ def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int
     token_ids: list[int] = []
     topology_map: list[int] = []
 
-    # BFS with explicit queue: (node_dict, parent_index)
-    queue: list[tuple[dict[str, Any], int]] = []
+    # BFS with explicit deque: (node_dict, parent_index)
+    queue: deque[tuple[dict[str, Any], int]] = deque()
     for root in draft_tree:
         queue.append((root, -1))
 
     while queue:
-        node, parent_idx = queue.pop(0)
+        node, parent_idx = queue.popleft()
         current_idx = len(token_ids)
         token_ids.append(node["token_id"])
         topology_map.append(parent_idx)
@@ -168,11 +169,14 @@ class TargetEngine:
         if self._tokenizer.pad_token is None:
             self._tokenizer.pad_token = self._tokenizer.eos_token
 
-        self._model = AutoModelForCausalLM.from_pretrained(
-            self.config.model_name,
-            torch_dtype=torch.float16,
-            device_map=self.config.device,
-        ).eval()
+        self._model = (
+            AutoModelForCausalLM.from_pretrained(
+                self.config.model_name,
+                torch_dtype=torch.float16,
+            )
+            .to(self.device)
+            .eval()
+        )
 
         self._is_loaded = True
         logger.info("Target model loaded: %s on %s", self.config.model_name, self.device)
@@ -192,16 +196,20 @@ class TargetEngine:
             if an existing cache was found.
         """
         if session_id in self._session_caches:
-            logger.debug("Session cache hit: %s (seq_len=%d)", session_id,
-                         self._session_caches[session_id].seq_len)
+            logger.debug(
+                "Session cache hit: %s (seq_len=%d)",
+                session_id,
+                self._session_caches[session_id].seq_len,
+            )
             return self._session_caches[session_id], True
 
         # Enforce max-sessions limit with LRU eviction
         if len(self._session_caches) >= self.config.max_sessions:
             evict_id = next(iter(self._session_caches))
             self.end_session(evict_id)
-            logger.warning("Evicted oldest session %s (max_sessions=%d)",
-                           evict_id, self.config.max_sessions)
+            logger.warning(
+                "Evicted oldest session %s (max_sessions=%d)", evict_id, self.config.max_sessions
+            )
 
         cache = KVCacheState()
         self._session_caches[session_id] = cache
@@ -277,10 +285,12 @@ class TargetEngine:
         # HuggingFace past_key_values shape: (key, value) each (batch, heads, seq, head_dim)
         rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
         for layer_key, layer_value in cache.past_key_values:
-            rolled_back.append((
-                layer_key[:, :, :accepted_depth, :].contiguous(),
-                layer_value[:, :, :accepted_depth, :].contiguous(),
-            ))
+            rolled_back.append(
+                (
+                    layer_key[:, :, :accepted_depth, :].contiguous(),
+                    layer_value[:, :, :accepted_depth, :].contiguous(),
+                )
+            )
 
         cache.past_key_values = tuple(rolled_back)
         old_len = cache.seq_len
@@ -288,7 +298,9 @@ class TargetEngine:
 
         logger.debug(
             "KV cache rolled back: session=%s, %d → %d tokens",
-            session_id, old_len, accepted_depth,
+            session_id,
+            old_len,
+            accepted_depth,
         )
 
     # --------------------------------------------------------------------- #
@@ -366,9 +378,7 @@ class TargetEngine:
             prefix_length = len(prompt_ids)
             past_kv = None  # Don't use stale cache
 
-        input_ids = torch.tensor(
-            [input_token_ids], dtype=torch.long, device=self.device
-        )
+        input_ids = torch.tensor([input_token_ids], dtype=torch.long, device=self.device)
         # Shape: [1, input_len]
 
         # --- Step 3: Build tree-attention mask ---
@@ -389,9 +399,7 @@ class TargetEngine:
             position_ids = position_ids[:, -new_len:]
 
         # Convert bool mask → float mask (0.0 / -inf) for HF compatibility
-        attn_mask_float = bool_mask_to_float(
-            attn_mask_bool, dtype=self._model.dtype
-        )
+        attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
 
         # --- Step 4: Forward pass ---
         with torch.no_grad():
@@ -418,9 +426,7 @@ class TargetEngine:
         tree_logits = all_logits[0, -num_tree_nodes:, :]
         # Shape: [num_tree_nodes, vocab_size]
 
-        draft_tokens_tensor = torch.tensor(
-            flat_token_ids, dtype=torch.long, device=self.device
-        )
+        draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
         # Shape: [num_tree_nodes]
 
         greedy_result = verify_greedy_tree(
@@ -431,11 +437,7 @@ class TargetEngine:
 
         # --- Step 7: Build VerificationResult ---
         accepted_ids = greedy_result.accepted_tokens
-        correction = (
-            greedy_result.bonus_token
-            if greedy_result.bonus_token >= 0
-            else None
-        )
+        correction = greedy_result.bonus_token if greedy_result.bonus_token >= 0 else None
 
         # --- Step 8: Rollback cache to accepted prefix ---
         if session_id is not None and cache_state is not None:

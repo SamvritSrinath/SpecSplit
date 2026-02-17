@@ -87,7 +87,7 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
                 prompt_ids=prompt_ids,
                 k=request.max_draft_len or None,
                 num_beams=request.num_beams or None,
-                temperature=request.temperature or None,
+                temperature=request.temperature,
             )
 
             response = spec_decoding_pb2.DraftResponse(

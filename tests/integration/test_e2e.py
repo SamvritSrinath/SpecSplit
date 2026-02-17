@@ -91,10 +91,14 @@ if not _SKIP:
 def model_and_tokenizer():
     """Load model + tokenizer once for the entire test module."""
     tokenizer = AutoTokenizer.from_pretrained(MODEL_ID)
-    model = AutoModelForCausalLM.from_pretrained(
-        MODEL_ID,
-        torch_dtype=torch.float32,  # float32 for CPU determinism
-    ).to("cpu").eval()
+    model = (
+        AutoModelForCausalLM.from_pretrained(
+            MODEL_ID,
+            torch_dtype=torch.float32,  # float32 for CPU determinism
+        )
+        .to("cpu")
+        .eval()
+    )
 
     if tokenizer.pad_token is None:
         tokenizer.pad_token = tokenizer.eos_token
@@ -146,7 +150,8 @@ def grpc_servers(draft_engine, target_engine):
     draft_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     draft_servicer = DraftServiceServicer(engine=draft_engine)
     spec_decoding_pb2_grpc.add_DraftServiceServicer_to_server(
-        draft_servicer, draft_server,
+        draft_servicer,
+        draft_server,
     )
     draft_port: int = draft_server.add_insecure_port("[::]:0")
     draft_server.start()
@@ -155,7 +160,8 @@ def grpc_servers(draft_engine, target_engine):
     target_server = grpc.server(futures.ThreadPoolExecutor(max_workers=4))
     target_servicer = TargetServiceServicer(engine=target_engine)
     spec_decoding_pb2_grpc.add_TargetServiceServicer_to_server(
-        target_servicer, target_server,
+        target_servicer,
+        target_server,
     )
     target_port: int = target_server.add_insecure_port("[::]:0")
     target_server.start()
@@ -192,7 +198,10 @@ def grpc_stubs(grpc_servers):
 
 
 def baseline_generate(
-    model: Any, tokenizer: Any, prompt: str, max_new_tokens: int,
+    model: Any,
+    tokenizer: Any,
+    prompt: str,
+    max_new_tokens: int,
 ) -> str:
     """Standard greedy ``model.generate()`` — the ground truth."""
     input_ids = tokenizer.encode(prompt, return_tensors="pt")
@@ -202,7 +211,7 @@ def baseline_generate(
             max_new_tokens=max_new_tokens,
             do_sample=False,
         )
-    return tokenizer.decode(out_ids[0, input_ids.shape[1]:], skip_special_tokens=True)
+    return tokenizer.decode(out_ids[0, input_ids.shape[1] :], skip_special_tokens=True)
 
 
 def specsplit_generate_via_grpc(
@@ -256,7 +265,10 @@ class TestE2EExactMatch:
 
     @pytest.mark.parametrize("prompt", PROMPTS, ids=lambda p: p[:40])
     def test_greedy_exact_match(
-        self, model_and_tokenizer, grpc_stubs, prompt: str,
+        self,
+        model_and_tokenizer,
+        grpc_stubs,
+        prompt: str,
     ):
         """Distributed speculative decoding must match standard greedy."""
         model, tokenizer = model_and_tokenizer
@@ -264,18 +276,23 @@ class TestE2EExactMatch:
 
         baseline = baseline_generate(model, tokenizer, prompt, MAX_NEW_TOKENS)
         specsplit = specsplit_generate_via_grpc(
-            draft_stub, target_stub, tokenizer, prompt, MAX_NEW_TOKENS,
+            draft_stub,
+            target_stub,
+            tokenizer,
+            prompt,
+            MAX_NEW_TOKENS,
         )
 
         assert specsplit == baseline, (
-            f"Output mismatch!\n"
-            f"  Baseline:    {baseline!r}\n"
-            f"  SpecSplit:   {specsplit!r}"
+            f"Output mismatch!\n  Baseline:    {baseline!r}\n  SpecSplit:   {specsplit!r}"
         )
 
     @pytest.mark.parametrize("k", [1, 3, 5, 10], ids=lambda k: f"k={k}")
     def test_exact_match_varying_draft_depth(
-        self, model_and_tokenizer, grpc_stubs, k: int,
+        self,
+        model_and_tokenizer,
+        grpc_stubs,
+        k: int,
     ):
         """Exact match must hold regardless of draft depth K."""
         model, tokenizer = model_and_tokenizer
@@ -308,9 +325,7 @@ class TestE2EExactMatch:
         specsplit = tokenizer.decode(output_ids, skip_special_tokens=True)
 
         assert specsplit == baseline, (
-            f"Mismatch at k={k}!\n"
-            f"  Baseline:    {baseline!r}\n"
-            f"  SpecSplit:   {specsplit!r}"
+            f"Mismatch at k={k}!\n  Baseline:    {baseline!r}\n  SpecSplit:   {specsplit!r}"
         )
 
     def test_token_ids_match(self, model_and_tokenizer, grpc_stubs):
@@ -324,10 +339,12 @@ class TestE2EExactMatch:
         input_t = torch.tensor([prompt_ids])
         with torch.no_grad():
             baseline_full = model.generate(
-                input_t, max_new_tokens=MAX_NEW_TOKENS, do_sample=False,
+                input_t,
+                max_new_tokens=MAX_NEW_TOKENS,
+                do_sample=False,
             )[0].tolist()
 
-        baseline_new = baseline_full[len(prompt_ids):]
+        baseline_new = baseline_full[len(prompt_ids) :]
 
         # SpecSplit token IDs
         config = OrchestratorConfig(
@@ -361,7 +378,11 @@ class TestE2EExactMatch:
 
         baseline = baseline_generate(model, tokenizer, prompt, max_new_tokens=3)
         specsplit = specsplit_generate_via_grpc(
-            draft_stub, target_stub, tokenizer, prompt, max_new_tokens=3,
+            draft_stub,
+            target_stub,
+            tokenizer,
+            prompt,
+            max_new_tokens=3,
         )
 
         assert specsplit == baseline

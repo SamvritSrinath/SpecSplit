@@ -32,8 +32,7 @@ def _make_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> Mag
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8))
-            for _ in range(2)
+            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
         )
 
         out = MagicMock()
@@ -153,9 +152,9 @@ class TestDraftEngine:
 
     def test_to_dict_serialization(self, draft_config: DraftWorkerConfig) -> None:
         """TokenNode.to_dict() should produce a serializable structure."""
-        node = TokenNode(token_id=42, log_prob=-0.5, children=[
-            TokenNode(token_id=7, log_prob=-0.3)
-        ])
+        node = TokenNode(
+            token_id=42, log_prob=-0.5, children=[TokenNode(token_id=7, log_prob=-0.3)]
+        )
         d = node.to_dict()
         assert d["token_id"] == 42
         assert d["log_prob"] == -0.5
