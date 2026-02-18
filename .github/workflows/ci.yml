@@ -1,0 +1,142 @@
+# =============================================================================
+# SpecSplit — Continuous Integration
+# =============================================================================
+# Runs on every push and PR to main.
+# Three jobs: lint-and-format, proto-check, unit-tests.
+# =============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  # ---------------------------------------------------------------------------
+  # Job 1: Lint, format check, and type check
+  # ---------------------------------------------------------------------------
+  lint-and-format:
+    name: Lint & Type Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -e ".[dev]" --no-cache-dir
+
+      - name: Ruff lint (includes isort rules)
+        run: ruff check specsplit/ tests/ scripts/
+
+      - name: Ruff format check
+        run: ruff format --check specsplit/ tests/ scripts/
+
+      - name: Mypy type check
+        run: mypy specsplit/
+
+  # ---------------------------------------------------------------------------
+  # Job 2: Verify proto files compile cleanly
+  # ---------------------------------------------------------------------------
+  proto-check:
+    name: Proto Compilation Check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Install protobuf tooling
+        run: |
+          python -m pip install --upgrade pip
+          pip install grpcio-tools>=1.60.0 mypy-protobuf>=3.5.0 --no-cache-dir
+
+      - name: Compile .proto files
+        run: |
+          python -m grpc_tools.protoc \
+            --proto_path=specsplit/proto \
+            --python_out=specsplit/proto \
+            --grpc_python_out=specsplit/proto \
+            --mypy_out=specsplit/proto \
+            specsplit/proto/spec_decoding.proto
+
+      - name: Verify generated files exist
+        run: |
+          test -f specsplit/proto/spec_decoding_pb2.py
+          test -f specsplit/proto/spec_decoding_pb2_grpc.py
+          echo "✓ Proto stubs generated successfully"
+
+      - name: Patch grpc imports and smoke-test import
+        run: |
+          sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+            specsplit/proto/spec_decoding_pb2_grpc.py
+          pip install grpcio>=1.60.0 protobuf>=4.25.0 --no-cache-dir
+          python -c "from specsplit.proto import spec_decoding_pb2_grpc; print('✓ Proto import smoke-test passed')"
+
+  # ---------------------------------------------------------------------------
+  # Job 3: Unit tests with lightweight models
+  # ---------------------------------------------------------------------------
+  unit-tests:
+    name: Unit Tests
+    runs-on: ubuntu-latest
+    env:
+      # Force lightweight models so CI runners don't OOM or timeout
+      SPECSPLIT_DRAFT_MODEL_NAME: gpt2
+      SPECSPLIT_TARGET_MODEL_NAME: gpt2
+      SPECSPLIT_DRAFT_DEVICE: cpu
+      SPECSPLIT_TARGET_DEVICE: cpu
+      # Writable HuggingFace cache directories
+      HF_HOME: /tmp/hf_home
+      TRANSFORMERS_CACHE: /tmp/hf_cache
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Python 3.10
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+
+      - name: Cache HuggingFace models
+        uses: actions/cache@v4
+        with:
+          path: /tmp/hf_home
+          key: hf-models-gpt2-${{ runner.os }}
+          restore-keys: |
+            hf-models-gpt2-
+
+      - name: Install PyTorch (CPU-only)
+        run: |
+          pip install --no-cache-dir \
+            torch --index-url https://download.pytorch.org/whl/cpu
+
+      - name: Install project dependencies
+        run: |
+          pip install --no-cache-dir -e ".[dev]"
+
+      - name: Compile proto stubs
+        run: |
+          python -m grpc_tools.protoc \
+            --proto_path=specsplit/proto \
+            --python_out=specsplit/proto \
+            --grpc_python_out=specsplit/proto \
+            --mypy_out=specsplit/proto \
+            specsplit/proto/spec_decoding.proto
+          sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+            specsplit/proto/spec_decoding_pb2_grpc.py
+
+      - name: Run unit tests
+        run: pytest tests/unit/ -v --tb=short -x
