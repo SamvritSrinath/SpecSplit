@@ -172,6 +172,25 @@ def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
     return token_ids, topology_map
 
 
+def _get_longest_path(draft: DraftTree) -> list[int]:
+    """Extract the longest root-to-leaf path from a flattened tree."""
+    children: dict[int, list[int]] = {}
+    for i, p in enumerate(draft.topology_map):
+        children.setdefault(p, []).append(i)
+    
+    best_path: list[int] = []
+    stack = [(r, [draft.token_ids[r]]) for r in children.get(-1, [])]
+    
+    while stack:
+        node, path = stack.pop()
+        if len(path) > len(best_path):
+            best_path = path
+        for c in children.get(node, []):
+            stack.append((c, path + [draft.token_ids[c]]))
+            
+    return best_path
+
+
 # ============================================================================
 # Async gRPC Stub Wrappers — Real gRPC calls
 # ============================================================================
@@ -229,7 +248,7 @@ async def _call_generate_drafts(
 
 async def _call_verify_drafts(
     target_stub: Any,
-    prompt_ids: list[int],
+    context_ids: list[int],
     draft_tree: DraftTree,
     session_id: str,
     config: OrchestratorConfig,
@@ -241,7 +260,7 @@ async def _call_verify_drafts(
 
     Args:
         target_stub: A gRPC stub for TargetService (sync or async).
-        prompt_ids: Original prompt token IDs.
+        context_ids: Full current context (prompt + generated so far).
         draft_tree: The draft tree to verify (with preserved proto nodes).
         session_id: Session ID for KV cache reuse.
         config: Pipeline configuration.
@@ -251,7 +270,7 @@ async def _call_verify_drafts(
     """
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
-        prompt_token_ids=prompt_ids,
+        prompt_token_ids=context_ids,
         draft_tree=draft_tree.proto_nodes,
         session_id=session_id,
     )
@@ -319,7 +338,7 @@ async def run_speculative_loop_async(
     prompt_ids: list[int],
     config: OrchestratorConfig | None = None,
     session_id: str = "default",
-    eos_token_id: int = 2,
+    eos_token_id: int | None = None,
 ) -> PipelineResult:
     """Run the overlapped speculative decoding loop.
 
@@ -410,17 +429,17 @@ async def run_speculative_loop_async(
         # --------------------------------------------------------------
         # Step A: Launch Verify(N) and speculative Draft(N+1) concurrently
         # --------------------------------------------------------------
-        # Our speculation assumption: Tree N's longest branch (all tokens)
-        # will be accepted, so we draft N+1 from:
-        #   context + all_of(tree_N) + hypothetical_bonus
-        speculative_context = current_context + current_draft.token_ids
-        speculative_assumption = list(current_draft.token_ids)
+        # Extract the longest path to form our speculation assumption, 
+        # avoiding sending a flat multi-branch tree to the draft context.
+        assumed_path = _get_longest_path(current_draft)
+        speculative_context = current_context + assumed_path
+        speculative_assumption = assumed_path
 
         # Create concurrent tasks
         verify_task = asyncio.create_task(
             _call_verify_drafts(
                 target_stub,
-                prompt_ids,
+                current_context,
                 current_draft,
                 session_id,
                 cfg,
@@ -461,20 +480,19 @@ async def run_speculative_loop_async(
         if verify_result.bonus_token is not None and verify_result.bonus_token != 0:
             new_tokens.append(verify_result.bonus_token)
 
-        state.generated_tokens.extend(new_tokens)
-        current_context = list(prompt_ids) + state.generated_tokens
-
         # Check for EOS in newly generated tokens
-        if eos_token_id in new_tokens:
+        if eos_token_id is not None and eos_token_id in new_tokens:
             logger.info("EOS token found at round %d", round_idx)
             # Truncate at EOS
             try:
-                eos_pos = state.generated_tokens.index(eos_token_id)
-                state.generated_tokens = state.generated_tokens[: eos_pos + 1]
+                eos_pos = new_tokens.index(eos_token_id)
+                new_tokens = new_tokens[: eos_pos + 1]
             except ValueError:
                 pass
             state.is_finished = True
-            break
+
+        state.generated_tokens.extend(new_tokens)
+        current_context = list(prompt_ids) + state.generated_tokens
 
         logger.debug(
             "Round %d: accepted %d/%d, bonus=%d, total_output=%d",
@@ -485,16 +503,13 @@ async def run_speculative_loop_async(
             len(state.generated_tokens),
         )
 
+        if state.is_finished:
+            break
+
         # --------------------------------------------------------------
         # Step C: Check if our speculation was correct
         # --------------------------------------------------------------
         actual_accepted = list(verify_result.accepted_tokens)
-        # Consider speculation correct if the actually accepted tokens match
-        # the prefix of our speculative assumption. We intentionally avoid
-        # comparing the lengths of the accepted tokens and the full
-        # speculative_assumption, because speculative_assumption may be
-        # derived from a flattened multi-beam token tree rather than a
-        # single branch, making a strict length equality unreliable.
         speculation_correct = actual_accepted == speculative_assumption[
             : len(actual_accepted)
         ]

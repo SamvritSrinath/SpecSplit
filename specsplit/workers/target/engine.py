@@ -72,10 +72,14 @@ class KVCacheState:
             ``(batch, num_heads, seq_len, head_dim)``.
         seq_len: The current cached sequence length (number of tokens
             whose KV projections are stored).
+        next_root_logit: The logit predicting the token directly following the
+            accepted sequence. Maintained to perfectly align the target model
+            upon a cache hit without duplicate forwarding.
     """
 
     past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None
     seq_len: int = 0
+    next_root_logit: torch.Tensor | None = None
 
 
 # =============================================================================
@@ -230,6 +234,7 @@ class TargetEngine:
         if cache is not None:
             # Explicitly delete tensors to free GPU memory
             cache.past_key_values = None
+            cache.next_root_logit = None
             logger.info("Session ended and cache released: %s", session_id)
             return True
         logger.debug("Session not found (already ended?): %s", session_id)
@@ -371,7 +376,9 @@ class TargetEngine:
         prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
 
         if cache_hit and prefix_length > 0:
-            # Cache hit: only feed the new draft tokens
+            # Cache hit: only feed the new draft tokens. 
+            # We explicitly DO NOT append prompt_ids[-1] to avoid duplicate
+            # tokens corrupting the target KV Cache.
             input_token_ids = flat_token_ids
         else:
             # No cache (or first call): feed prompt + draft tokens
@@ -421,18 +428,6 @@ class TargetEngine:
             cache_state.seq_len = new_seq_len
 
         # --- Step 6: Extract tree-position logits and verify ---
-        # In a causal LM, logits at position t predict the token at position t+1.
-        # To verify draft token i correctly:
-        #   - For root nodes (parent == -1): compare against logits from position (prefix_length - 1)
-        #   - For child nodes: compare against logits from position (prefix_length + parent_index)
-        #
-        # TODO(correctness): When using KV cache, we only have tree node logits in the output,
-        # not the last prefix logit needed for root verification. Current implementation falls
-        # back to tree_logits[0] for cached roots, which may reduce accuracy. Consider either:
-        # (a) always feeding last prefix token along with tree, or
-        # (b) storing last prefix logit in cache state, or
-        # (c) doing a separate single-token forward pass for the last prefix token.
-        
         all_logits = outputs.logits  # [1, input_len, vocab_size]
         
         # Build verification logits by gathering from parent positions
@@ -446,11 +441,10 @@ class TargetEngine:
         for i in range(num_tree_nodes):
             parent_idx = topology_map[i]
             if parent_idx == -1:
-                # Root node: should use logits from last prefix position
-                if cache_hit and prefix_length > 0:
-                    # Cache hit: last prefix logit not available, approximate with first tree logit
-                    # This is a known limitation (see TODO above)
-                    tree_logits[i] = all_logits[0, 0, :]
+                # Root node: Verification requires logits predicting the token itself.
+                if cache_hit and prefix_length > 0 and cache_state.next_root_logit is not None:
+                    # Leverage the saved `next_root_logit` generated during the previous round.
+                    tree_logits[i] = cache_state.next_root_logit
                 elif prefix_length > 0:
                     # No cache: all_logits contains prefix + tree, use last prefix position
                     tree_logits[i] = all_logits[0, prefix_length - 1, :]
@@ -460,7 +454,7 @@ class TargetEngine:
             else:
                 # Child node: use logits from parent's position
                 if cache_hit:
-                    # With cache: all_logits[j] corresponds to tree node j
+                    # With cache: flat_token_ids start at index 0.
                     tree_logits[i] = all_logits[0, parent_idx, :]
                 else:
                     # Without cache: all_logits contains prefix + tree
@@ -479,14 +473,14 @@ class TargetEngine:
         accepted_ids = greedy_result.accepted_tokens
         correction = greedy_result.bonus_token if greedy_result.bonus_token >= 0 else None
 
-        # --- Step 8: Rollback cache to accepted prefix and extend with correction ---
+        # --- Step 8: Rollback cache to accepted prefix and update logic states ---
         if session_id is not None and cache_state is not None:
             accepted_total = prefix_length + greedy_result.num_accepted
             if accepted_total <= cache_state.seq_len:
                 self.rollback_cache(session_id, accepted_total)
             
             # If we're emitting a correction/bonus token, extend the cache to include it
-            # so subsequent rounds can build on the full accepted + correction prefix.
+            # and explicitly maintain the `next_root_logit` for the upcoming cache hit.
             if correction is not None and correction >= 0:
                 correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
                 with torch.no_grad():
@@ -502,11 +496,23 @@ class TargetEngine:
                     if correction_output.past_key_values
                     else 0
                 )
+                
+                # Save the logit predicting the new round's root token!
+                cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
+                
                 logger.debug(
                     "Extended cache with correction token %d, new seq_len=%d",
                     correction,
                     cache_state.seq_len,
                 )
+            else:
+                # No correction token fallback: Fetch logit from the last successfully accepted position
+                if greedy_result.num_accepted > 0:
+                    leaf_idx = greedy_result.accepted_leaf_index
+                    if cache_hit:
+                        cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
+                    else:
+                        cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
 
         sw.stop()
         logger.debug(
