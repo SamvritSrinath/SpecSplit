@@ -87,7 +87,7 @@ class KVCacheState:
 # =============================================================================
 
 
-def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int]]:
+def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:    
     """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
 
     Performs a BFS/DFS traversal of the tree and assigns contiguous indices
@@ -105,8 +105,8 @@ def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int
     """
     token_ids: list[int] = []
     topology_map: list[int] = []
+    log_probs: list[float] = []
 
-    # BFS with explicit deque: (node_dict, parent_index)
     queue: deque[tuple[dict[str, Any], int]] = deque()
     for root in draft_tree:
         queue.append((root, -1))
@@ -116,11 +116,12 @@ def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int
         current_idx = len(token_ids)
         token_ids.append(node["token_id"])
         topology_map.append(parent_idx)
+        log_probs.append(node.get("log_prob", 0.0))
 
         for child in node.get("children", []):
             queue.append((child, current_idx))
 
-    return token_ids, topology_map
+    return token_ids, topology_map, log_probs
 
 
 # =============================================================================
@@ -318,6 +319,7 @@ class TargetEngine:
         prompt_ids: list[int],
         draft_tree: list[dict[str, Any]],
         session_id: str | None = None,
+        temperature: float = 0.0,  # <-- Added temperature
     ) -> VerificationResult:
         """Verify a draft token tree against the target model's distribution.
 
@@ -368,7 +370,7 @@ class TargetEngine:
             )
 
         # --- Step 1: Flatten tree → (token_ids, topology_map) ---
-        flat_token_ids, topology_map = _flatten_tree(draft_tree)
+        flat_token_ids, topology_map, flat_log_probs = _flatten_tree(draft_tree)       
         num_tree_nodes = len(flat_token_ids)
 
         # --- Step 2: Determine what to feed the model ---
@@ -461,26 +463,41 @@ class TargetEngine:
                     tree_logits[i] = all_logits[0, prefix_length + parent_idx, :]
 
         draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
-        # Shape: [num_tree_nodes]
-
-        greedy_result = verify_greedy_tree(
-            draft_tokens=draft_tokens_tensor,
-            target_logits=tree_logits,
-            topology_map=topology_map,
-        )
+        
+        # --- Task 3.3: Speculative Acceptance Routing ---
+        if temperature > 0.0:
+            # Convert target logits to probabilities
+            target_probs = torch.softmax(tree_logits / temperature, dim=-1)
+            # Convert draft log_probs back to probabilities
+            draft_probs = torch.exp(torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device))
+            
+            from specsplit.core.verification import verify_stochastic_tree
+            result_data = verify_stochastic_tree(
+                draft_tokens=draft_tokens_tensor,
+                draft_probs=draft_probs,
+                target_probs=target_probs,
+                topology_map=topology_map,
+            )
+        else:
+            # Fallback to pure greedy verification
+            result_data = verify_greedy_tree(
+                draft_tokens=draft_tokens_tensor,
+                target_logits=tree_logits,
+                topology_map=topology_map,
+            )
 
         # --- Step 7: Build VerificationResult ---
-        accepted_ids = greedy_result.accepted_tokens
-        correction = greedy_result.bonus_token if greedy_result.bonus_token >= 0 else None
+        accepted_ids = result_data.accepted_tokens
+        correction = result_data.bonus_token if result_data.bonus_token >= 0 else None
+        num_accepted = result_data.num_accepted
+        leaf_idx = result_data.accepted_leaf_index
 
         # --- Step 8: Rollback cache to accepted prefix and update logic states ---
         if session_id is not None and cache_state is not None:
-            accepted_total = prefix_length + greedy_result.num_accepted
+            accepted_total = prefix_length + num_accepted
             if accepted_total <= cache_state.seq_len:
                 self.rollback_cache(session_id, accepted_total)
             
-            # If we're emitting a correction/bonus token, extend the cache to include it
-            # and explicitly maintain the `next_root_logit` for the upcoming cache hit.
             if correction is not None and correction >= 0:
                 correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
                 with torch.no_grad():
@@ -489,50 +506,26 @@ class TargetEngine:
                         past_key_values=cache_state.past_key_values,
                         use_cache=True,
                     )
-                # Update cache with the correction token
                 cache_state.past_key_values = correction_output.past_key_values
                 cache_state.seq_len = (
                     correction_output.past_key_values[0][0].shape[2]
-                    if correction_output.past_key_values
-                    else 0
+                    if correction_output.past_key_values else 0
                 )
-                
-                # Save the logit predicting the new round's root token!
                 cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
-                
-                logger.debug(
-                    "Extended cache with correction token %d, new seq_len=%d",
-                    correction,
-                    cache_state.seq_len,
-                )
             else:
-                # No correction token fallback: Fetch logit from the last successfully accepted position
-                if greedy_result.num_accepted > 0:
-                    leaf_idx = greedy_result.accepted_leaf_index
+                if num_accepted > 0:
                     if cache_hit:
                         cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
                     else:
                         cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
 
         sw.stop()
-        logger.debug(
-            "Verification complete: session=%s, cache_hit=%s, "
-            "accepted=%d/%d, correction=%s, elapsed=%.3f ms",
-            session_id,
-            cache_hit,
-            greedy_result.num_accepted,
-            num_tree_nodes,
-            correction,
-            sw.elapsed_ms,
-        )
-
         return VerificationResult(
             accepted_token_ids=accepted_ids,
             correction_token_id=correction,
-            num_accepted=greedy_result.num_accepted,
+            num_accepted=num_accepted,
             cache_hit=cache_hit,
         )
-
     # --------------------------------------------------------------------- #
     # Properties
     # --------------------------------------------------------------------- #
