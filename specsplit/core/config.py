@@ -121,5 +121,7 @@ class OrchestratorConfig(BaseSettings):
         le=64,
         description="Draft tree depth (K / gamma) forwarded to the Draft Worker.",
     )
+    # Task 4.1: Synthetic Latency Rig (milliseconds)
+    simulated_rtt_ms: float = Field(default=0.0, description="Injected network latency per RPC")
 
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}

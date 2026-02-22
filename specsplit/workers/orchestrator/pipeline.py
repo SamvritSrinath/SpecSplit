@@ -218,6 +218,10 @@ async def _call_generate_drafts(
     Returns:
         A :class:`DraftTree` produced by the Draft Worker.
     """
+    # Inject Synthetic RTT Latency (Task 4.1)
+    if config.simulated_rtt_ms > 0:
+        await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
+
     request = spec_decoding_pb2.DraftRequest(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
@@ -268,6 +272,10 @@ async def _call_verify_drafts(
     Returns:
         A :class:`VerificationResult` from the Target Worker.
     """
+    # Inject Synthetic RTT Latency (Task 4.1)
+    if config.simulated_rtt_ms > 0:
+        await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
+        
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,

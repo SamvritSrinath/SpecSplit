@@ -153,58 +153,69 @@ class DraftEngine:
         # -----------------------------------------------------------------
         # Autoregressive draft generation — produce `num_beams` chains
         # -----------------------------------------------------------------
+        # -----------------------------------------------------------------
+        # Task 2.2: True Tree Construction (BFS Level-Order Expansion)
+        # -----------------------------------------------------------------
         roots: list[TokenNode] = []
-
-        for _beam_idx in range(num_beams):
-            # Each beam starts from the same prompt prefix KV cache
-            beam_past_kv = past_kv
-            current_logits = last_logits  # Shape: [1, vocab_size]
-            chain: list[tuple[int, float]] = []
-
-            for _step in range(k):
-                with torch.no_grad():
-                    # Sample or greedy-pick the next token
-                    probs = logits_to_probs(current_logits, temperature=temperature)
-                    # Shape: [1, vocab_size]
-
-                    if temperature == 0.0:
-                        # Greedy
-                        next_token_id = current_logits.argmax(dim=-1)  # [1]
+        
+        # Queue stores: (parent_node, past_key_values, logits, current_depth)
+        # We start with the prompt's output state. parent_node=None means these will be roots.
+        queue = [(None, self._kv_cache, last_logits, 0)]
+        
+        while queue:
+            parent_node, past_kv, logits, depth = queue.pop(0)
+            
+            if depth >= k:
+                continue
+                
+            # Dynamic Branching Topology: 
+            # To prevent exponential explosion (e.g., 2^5 = 32 nodes), we branch heavily
+            # at the root (depth 0), and reduce branching deeper in the tree.
+            # E.g., if num_beams=3: Depth 0 branches 3 ways, Depth 1 branches 2 ways, Depth 2+ is straight lines.
+            branching_factor = max(1, num_beams - depth)
+            
+            with torch.no_grad():
+                probs = logits_to_probs(logits, temperature=temperature)
+                
+                if temperature == 0.0:
+                    # Top-B greedy probabilities
+                    top_probs, top_indices = torch.topk(probs, branching_factor, dim=-1)
+                else:
+                    # Top-B stochastic sampling
+                    top_indices = torch.multinomial(probs, num_samples=branching_factor)
+                    top_probs = torch.gather(probs, -1, top_indices)
+                
+                # Expand each selected branch
+                for i in range(branching_factor):
+                    token_id_int = top_indices[0, i].item()
+                    log_prob = math.log(top_probs[0, i].item() + 1e-10)
+                    
+                    child_node = TokenNode(token_id=token_id_int, log_prob=log_prob)
+                    
+                    if parent_node is None:
+                        roots.append(child_node)
                     else:
-                        # Top-k=1 multinomial (temperature-scaled greedy for
-                        # temp≈1, or stochastic sampling)
-                        next_token_id = torch.multinomial(probs, num_samples=1).squeeze(-1)
-                        # Shape: [1]
-
-                    token_id_int = next_token_id.item()
-                    # Log probability of the chosen token
-                    log_prob = math.log(probs[0, token_id_int].item() + 1e-10)
-                    chain.append((token_id_int, log_prob))
-
-                    # Forward pass for the next step with KV cache
-                    next_input = next_token_id.unsqueeze(0)  # [1, 1]
+                        parent_node.children.append(child_node)
+                        
+                    # Compute the forward pass for this specific branch
+                    next_input = torch.tensor([[token_id_int]], dtype=torch.long, device=self.device)
                     step_out = self._model(
                         input_ids=next_input,
-                        past_key_values=beam_past_kv,
+                        past_key_values=past_kv,
                         use_cache=True,
                     )
-                    beam_past_kv = step_out.past_key_values
-                    current_logits = step_out.logits[:, -1, :]
-                    # Shape: [1, vocab_size]
-
-            # Build a flat TokenNode chain from the collected tokens
-            if chain:
-                root = TokenNode(token_id=chain[0][0], log_prob=chain[0][1])
-                current_node = root
-                for tid, lp in chain[1:]:
-                    child = TokenNode(token_id=tid, log_prob=lp)
-                    current_node.children.append(child)
-                    current_node = child
-                roots.append(root)
+                    
+                    # Add child to the queue to expand next depth
+                    queue.append((
+                        child_node, 
+                        step_out.past_key_values, 
+                        step_out.logits[:, -1, :], 
+                        depth + 1
+                    ))
 
         sw.stop()
         logger.debug(
-            "Generated draft tree: depth=%d, beams=%d, elapsed=%.3f ms",
+            "Generated true draft tree: depth=%d, root_branching=%d, elapsed=%.3f ms",
             k,
             num_beams,
             sw.elapsed_ms,
