@@ -64,6 +64,7 @@ class DraftEngine:
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._kv_cache: Any = None  # Model-specific past_key_values
         self._cached_prompt_len: int = 0  # Length of prompt encoded in _kv_cache
+        self._cached_last_logits: torch.Tensor | None = None  # Logits at end of cached prefix
         self._is_loaded = False
 
         logger.info(
@@ -132,35 +133,51 @@ class DraftEngine:
             raise RuntimeError("Draft model not loaded. Call load_model() first.")
 
         # -----------------------------------------------------------------
-        # Encode the prompt prefix (or reuse cached KV)
+        # Encode the prompt prefix (with cross-round KV cache reuse)
         # -----------------------------------------------------------------
-        input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
-        # Shape: [1, prompt_len]
+        new_ids = prompt_ids[self._cached_prompt_len:]
 
-        with torch.no_grad():
-            # Always recompute prompt for simplicity per-call
-            # (cross-round caching will be added in a future PR)
-            prefix_out = self._model(
-                input_ids=input_ids,
-                past_key_values=None,
-                use_cache=True,
-            )
+        if self._kv_cache is not None and len(prompt_ids) >= self._cached_prompt_len:
+            if new_ids:
+                # Case B: context grew — extend from cached KV with only the new tokens
+                new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
+                with torch.no_grad():
+                    prefix_out = self._model(
+                        input_ids=new_input,
+                        past_key_values=self._kv_cache,
+                        use_cache=True,
+                    )
+                past_kv = prefix_out.past_key_values
+                last_logits = prefix_out.logits[:, -1, :]
+            else:
+                # Case C: exact match — reuse stored KV and logits, no forward pass needed
+                past_kv = self._kv_cache
+                last_logits = self._cached_last_logits
+        else:
+            # Case A: no cache or stale — full prefix recompute from scratch
+            input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                prefix_out = self._model(
+                    input_ids=input_ids,
+                    past_key_values=None,
+                    use_cache=True,
+                )
             past_kv = prefix_out.past_key_values
-            # last_logits shape: [1, prompt_len, vocab_size]
             last_logits = prefix_out.logits[:, -1, :]
-            # Shape: [1, vocab_size]
 
-        # -----------------------------------------------------------------
-        # Autoregressive draft generation — produce `num_beams` chains
-        # -----------------------------------------------------------------
+        # Update cache state for next round
+        self._kv_cache = past_kv
+        self._cached_prompt_len = len(prompt_ids)
+        self._cached_last_logits = last_logits
+
         # -----------------------------------------------------------------
         # Task 2.2: True Tree Construction (BFS Level-Order Expansion)
         # -----------------------------------------------------------------
         roots: list[TokenNode] = []
-        
+
         # Queue stores: (parent_node, past_key_values, logits, current_depth)
         # We start with the prompt's output state. parent_node=None means these will be roots.
-        queue = [(None, self._kv_cache, last_logits, 0)]
+        queue = [(None, past_kv, last_logits, 0)]
         
         while queue:
             parent_node, past_kv, logits, depth = queue.pop(0)
@@ -226,6 +243,7 @@ class DraftEngine:
         """Clear the KV cache (e.g., on prompt change or verification failure)."""
         self._kv_cache = None
         self._cached_prompt_len = 0
+        self._cached_last_logits = None
         logger.debug("KV cache cleared")
 
     @property

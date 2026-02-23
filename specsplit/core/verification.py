@@ -337,7 +337,10 @@ def verify_stochastic_tree(
     # Determine the bonus (correction) token using the target's distribution
     if current_node == -1:
         # Rejected at root. Sample from the first root's target distribution.
-        root_idx = children.get(-1, [0])[0]
+        roots = children.get(-1, [])
+        if not roots:
+            raise ValueError("verify_stochastic_tree: draft tree has no root nodes")
+        root_idx = roots[0]
         p_dist = target_probs[root_idx]
         bonus_token = torch.multinomial(p_dist, 1).item()
     else:

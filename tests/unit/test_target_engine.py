@@ -127,9 +127,10 @@ class TestFlattenTree:
                 ],
             }
         ]
-        token_ids, topology = _flatten_tree(tree)
+        token_ids, topology, log_probs = _flatten_tree(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 1]
+        assert log_probs == [-0.1, -0.2, -0.3]
 
     def test_branching_tree(self) -> None:
         """A tree with branching should produce correct parent indices."""
@@ -143,15 +144,17 @@ class TestFlattenTree:
                 ],
             }
         ]
-        token_ids, topology = _flatten_tree(tree)
+        token_ids, topology, log_probs = _flatten_tree(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 0]
+        assert log_probs == [-0.1, -0.2, -0.3]
 
     def test_empty_tree(self) -> None:
         """An empty tree should produce empty lists."""
-        token_ids, topology = _flatten_tree([])
+        token_ids, topology, log_probs = _flatten_tree([])
         assert token_ids == []
         assert topology == []
+        assert log_probs == []
 
     def test_multiple_roots(self) -> None:
         """Multiple root nodes should each have parent -1."""
@@ -159,9 +162,10 @@ class TestFlattenTree:
             {"token_id": 10, "log_prob": -0.1, "children": []},
             {"token_id": 20, "log_prob": -0.2, "children": []},
         ]
-        token_ids, topology = _flatten_tree(tree)
+        token_ids, topology, log_probs = _flatten_tree(tree)
         assert token_ids == [10, 20]
         assert topology == [-1, -1]
+        assert log_probs == [-0.1, -0.2]
 
 
 # =========================================================================
