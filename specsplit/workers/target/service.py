@@ -111,7 +111,18 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # new_token_ids is populated, the orchestrator is sending only
             # the delta. The target engine's session cache already has the
             # prefix and only needs the new tokens appended.
+            #
+            # CRITICAL GUARD: If the session was evicted (TTL or LRU), the
+            # engine no longer has the prefix. Using only the 2-3 delta
+            # tokens as the full prompt would cause the 70B model to
+            # verify against a nonsensical context, producing garbage.
             if not prompt_ids and new_ids:
+                if not session_id or session_id not in self._engine._session_caches:
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
+                        "orchestrator must retry with full context",
+                    )
                 prompt_ids = new_ids
 
             if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:

@@ -614,7 +614,47 @@ async def run_speculative_loop_async(
                     )
                     state.is_finished = True
                     break
-                raise
+
+                # Cache-eviction retry: target rejected delta-only payload
+                # because the session was evicted (TTL/LRU). Retry with
+                # full context so the target can rebuild its cache.
+                if (
+                    e.code() == grpc.StatusCode.FAILED_PRECONDITION
+                    and "CACHE_EVICTED_DELTA_ONLY" in (e.details() or "")
+                ):
+                    logger.warning(
+                        "Target cache evicted for session %s at round %d. "
+                        "Retrying verify with full context.",
+                        session_id,
+                        round_idx,
+                    )
+                    # Cancel the speculative draft — we'll re-draft after retry
+                    speculative_draft_task.cancel()
+
+                    # Retry with full context (no deltas)
+                    retry_result = await _call_verify_drafts(
+                        target_stub,
+                        current_context,
+                        current_draft,
+                        session_id,
+                        cfg,
+                        new_token_ids=None,
+                    )
+                    verify_rpc_result = retry_result
+                    state.total_rpc_time_ms += retry_result.elapsed_ms
+
+                    # Re-issue speculative draft
+                    speculative_draft_rpc_result = await _call_generate_drafts(
+                        draft_stub,
+                        prompt_ids,
+                        speculative_context,
+                        cfg,
+                        round_idx=round_idx + 1,
+                        session_id=session_id,
+                    )
+                    state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
+                else:
+                    raise
 
         # Unwrap _RpcResult and accumulate RPC times
         verify_result = verify_rpc_result.value
