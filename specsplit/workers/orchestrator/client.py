@@ -178,8 +178,8 @@ def main() -> None:
     parser.add_argument(
         "--model-name",
         type=str,
-        default="gpt2",
-        help="HuggingFace model name for tokenizer (default: gpt2)",
+        default=None,
+        help="Tokenizer model; must match target/draft (e.g. Qwen2/Qwen2.5-7B-Instruct). Overrides SPECSPLIT_ORCH_TOKENIZER_MODEL.",
     )
     parser.add_argument(
         "--telemetry-output",
@@ -203,8 +203,8 @@ def main() -> None:
     if args.max_rounds is not None:
         config_kw["max_rounds"] = args.max_rounds
     config = OrchestratorConfig(**config_kw)
-
-    orch = Orchestrator(config=config, model_name=args.model_name)
+    model_name = args.model_name if args.model_name is not None else config.tokenizer_model
+    orch = Orchestrator(config=config, model_name=model_name)
     orch.connect()
     result = orch.run(args.prompt)
 
