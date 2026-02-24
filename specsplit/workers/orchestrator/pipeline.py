@@ -42,13 +42,23 @@ import asyncio
 import logging
 import uuid
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, Generic, TypeVar
 
 from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2
 
 logger = logging.getLogger(__name__)
+
+T = TypeVar("T")
+
+
+@dataclass
+class _RpcResult(Generic[T]):
+    """Wrapper pairing an RPC response with its wall-clock duration."""
+
+    value: T
+    elapsed_ms: float
 
 
 # ============================================================================
@@ -94,6 +104,17 @@ class VerificationResult:
 
 
 @dataclass
+class RoundMetrics:
+    """Per-round metrics for fine-grained acceptance analysis."""
+
+    round_idx: int
+    accepted: int
+    path_depth: int
+    tree_nodes: int
+    acceptance_rate: float
+
+
+@dataclass
 class SpeculativeState:
     """Tracks the current state of the speculative pipeline.
 
@@ -118,6 +139,8 @@ class SpeculativeState:
     total_tree_nodes: int = 0
     speculation_hits: int = 0
     speculation_misses: int = 0
+    total_rpc_time_ms: float = 0.0
+    per_round_metrics: list[RoundMetrics] = field(default_factory=list)
     is_finished: bool = False
 
 
@@ -139,6 +162,8 @@ class PipelineResult:
     acceptance_rate: float
     speculation_hit_rate: float
     wall_time_ms: float
+    network_idle_ms: float = 0.0
+    per_round_acceptance: list[dict[str, Any]] = field(default_factory=list)
     telemetry: list[dict[str, Any]] = field(default_factory=list)
 
 
@@ -209,7 +234,8 @@ async def _call_generate_drafts(
     context_ids: list[int],
     config: OrchestratorConfig,
     round_idx: int,
-) -> DraftTree:
+    reset_cache: bool = False,
+) -> _RpcResult[DraftTree]:
     """Call ``DraftService.GenerateDrafts`` over gRPC.
 
     Constructs a ``DraftRequest`` protobuf, sends it to the Draft Worker,
@@ -221,10 +247,16 @@ async def _call_generate_drafts(
         context_ids: Current context (prompt + generated so far).
         config: Pipeline configuration.
         round_idx: Current round index (for tracing).
+        reset_cache: If True, instruct the draft engine to clear its
+            KV cache before generating (e.g. after speculation miss).
 
     Returns:
-        A :class:`DraftTree` produced by the Draft Worker.
+        An :class:`_RpcResult` wrapping a :class:`DraftTree` and the RPC
+        wall-clock elapsed time in milliseconds.
     """
+    rpc_sw = Stopwatch()
+    rpc_sw.start()
+
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
@@ -233,6 +265,7 @@ async def _call_generate_drafts(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
         max_draft_len=config.max_draft_tokens,
+        reset_cache=reset_cache,
     )
 
     response = draft_stub.GenerateDrafts(request)
@@ -240,30 +273,34 @@ async def _call_generate_drafts(
     if asyncio.iscoroutine(response) or asyncio.isfuture(response):
         response = await response
 
+    rpc_sw.stop()
+
     # Convert the nested proto tree to flat arrays
     proto_nodes = list(response.draft_tree)
     token_ids, topology_map = _flatten_proto_tree(proto_nodes)
 
     logger.debug(
-        "Draft RPC completed: round=%d, tokens=%d",
+        "Draft RPC completed: round=%d, tokens=%d, rpc_ms=%.2f",
         round_idx,
         len(token_ids),
+        rpc_sw.elapsed_ms,
     )
-    return DraftTree(
+    tree = DraftTree(
         token_ids=token_ids,
         topology_map=topology_map,
         proto_nodes=proto_nodes,
         round_idx=round_idx,
     )
+    return _RpcResult(value=tree, elapsed_ms=rpc_sw.elapsed_ms)
 
 
 async def _call_verify_drafts(
     target_stub: Any,
     context_ids: list[int],
     draft_tree: DraftTree,
-    session_id: str,
+    session_id: str | None,
     config: OrchestratorConfig,
-) -> VerificationResult:
+) -> _RpcResult[VerificationResult]:
     """Call ``TargetService.VerifyDrafts`` over gRPC.
 
     Forwards the draft tree's proto nodes directly to the Target Worker
@@ -273,12 +310,16 @@ async def _call_verify_drafts(
         target_stub: A gRPC stub for TargetService (sync or async).
         context_ids: Full current context (prompt + generated so far).
         draft_tree: The draft tree to verify (with preserved proto nodes).
-        session_id: Session ID for KV cache reuse.
+        session_id: Session ID for KV cache reuse, or None for stateless.
         config: Pipeline configuration.
 
     Returns:
-        A :class:`VerificationResult` from the Target Worker.
+        An :class:`_RpcResult` wrapping a :class:`VerificationResult` and
+        the RPC wall-clock elapsed time in milliseconds.
     """
+    rpc_sw = Stopwatch()
+    rpc_sw.start()
+
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
@@ -287,7 +328,8 @@ async def _call_verify_drafts(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
         draft_tree=draft_tree.proto_nodes,
-        session_id=session_id,
+        session_id=session_id or "",
+        temperature=config.temperature,
     )
 
     response = target_stub.VerifyDrafts(request)
@@ -295,23 +337,27 @@ async def _call_verify_drafts(
     if asyncio.iscoroutine(response) or asyncio.isfuture(response):
         response = await response
 
+    rpc_sw.stop()
+
     accepted_tokens = list(response.accepted_token_ids)
     correction = response.correction_token_id if response.correction_token_id != 0 else None
 
     logger.debug(
-        "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s",
+        "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s, rpc_ms=%.2f",
         draft_tree.round_idx,
         response.num_accepted,
         len(draft_tree.token_ids),
         correction,
+        rpc_sw.elapsed_ms,
     )
-    return VerificationResult(
+    vr = VerificationResult(
         accepted_tokens=accepted_tokens,
         bonus_token=response.correction_token_id,
         accepted_length=response.num_accepted,
         cache_hit=response.cache_hit,
         round_idx=draft_tree.round_idx,
     )
+    return _RpcResult(value=vr, elapsed_ms=rpc_sw.elapsed_ms)
 
 
 async def _call_flush_draft_cache(
@@ -414,13 +460,15 @@ async def run_speculative_loop_async(
     speculative_assumption: list[int] = []  # What we assumed N would accept
 
     with telemetry.span("initial_draft", round_idx=0):
-        current_draft = await _call_generate_drafts(
+        initial_rpc = await _call_generate_drafts(
             draft_stub,
             prompt_ids,
             current_context,
             cfg,
             round_idx=0,
         )
+        current_draft = initial_rpc.value
+        state.total_rpc_time_ms += initial_rpc.elapsed_ms
 
     # ------------------------------------------------------------------
     # Main Loop: Overlapped Draft(N+1) ‖ Verify(N)
@@ -478,10 +526,16 @@ async def run_speculative_loop_async(
             round_idx=round_idx,
             draft_tokens=len(current_draft.token_ids),
         ):
-            verify_result, speculative_draft = await asyncio.gather(
+            verify_rpc_result, speculative_draft_rpc_result = await asyncio.gather(
                 verify_task,
                 speculative_draft_task,
             )
+
+        # Unwrap _RpcResult and accumulate RPC times
+        verify_result = verify_rpc_result.value
+        speculative_draft = speculative_draft_rpc_result.value
+        state.total_rpc_time_ms += verify_rpc_result.elapsed_ms
+        state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
 
         # --------------------------------------------------------------
         # Step B: Process verification result
@@ -492,6 +546,20 @@ async def run_speculative_loop_async(
         path_depth = len(assumed_path)
         state.total_path_depth += path_depth
         state.total_accepted += verify_result.accepted_length
+
+        # Issue 14: Record per-round acceptance metrics
+        round_acc = (
+            verify_result.accepted_length / path_depth if path_depth > 0 else 0.0
+        )
+        state.per_round_metrics.append(
+            RoundMetrics(
+                round_idx=round_idx,
+                accepted=verify_result.accepted_length,
+                path_depth=path_depth,
+                tree_nodes=len(current_draft.token_ids),
+                acceptance_rate=round_acc,
+            )
+        )
 
         # Append accepted tokens and bonus token to output
         new_tokens = list(verify_result.accepted_tokens)
@@ -546,6 +614,11 @@ async def run_speculative_loop_async(
         # a context that diverges at the very first position — the target
         # would reject everything, wasting a verify call.
         actual_accepted = list(verify_result.accepted_tokens)
+        # NOTE: This comparison uses token IDs only. In theory, two
+        # different branches in the tree could have identical token ID
+        # sequences, producing a false-positive speculation hit. This
+        # is negligible for real LLMs (vocab 32K+) but could matter
+        # for small-vocabulary CI models with high branching factor.
         path_matches = actual_accepted == list(speculative_assumption)
 
         bonus_matches = False
@@ -580,18 +653,22 @@ async def run_speculative_loop_async(
             )
 
             # Send flush signal to Target Worker to clear its speculative cache (no-op when stateless)
-            if session_id:
+            if session_id is not None:
                 await _call_flush_draft_cache(target_stub, session_id)
 
-            # Re-draft from the CORRECTED context
+            # Re-draft from the CORRECTED context, with reset_cache=True
+            # to invalidate the draft engine's stale cross-round KV cache.
             with telemetry.span("re_draft", round_idx=round_idx):
-                current_draft = await _call_generate_drafts(
+                re_draft_rpc = await _call_generate_drafts(
                     draft_stub,
                     prompt_ids,
                     current_context,
                     cfg,
                     round_idx=round_idx + 1,
+                    reset_cache=True,
                 )
+                current_draft = re_draft_rpc.value
+                state.total_rpc_time_ms += re_draft_rpc.elapsed_ms
             speculative_draft = None
 
     # ------------------------------------------------------------------
@@ -613,6 +690,17 @@ async def run_speculative_loop_async(
         acceptance_rate=acceptance_rate,
         speculation_hit_rate=spec_hit_rate,
         wall_time_ms=pipeline_sw.elapsed_ms,
+        network_idle_ms=state.total_rpc_time_ms,
+        per_round_acceptance=[
+            {
+                "round": m.round_idx,
+                "accepted": m.accepted,
+                "path_depth": m.path_depth,
+                "tree_nodes": m.tree_nodes,
+                "acceptance_rate": round(m.acceptance_rate, 4),
+            }
+            for m in state.per_round_metrics
+        ],
         telemetry=[s.to_dict() for s in telemetry.spans],
     )
 

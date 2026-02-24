@@ -61,6 +61,8 @@ message DraftRequest {
   int32   max_draft_len  = 3;  // Maximum tree depth (K).
   int32   num_beams      = 4;  // Branching factor at each level.
   float   temperature    = 5;  // Sampling temperature for draft generation.
+  bool    reset_cache    = 6;  // If true, clear draft KV cache before generating
+                               // (used after speculation misses).
 }
 
 // Response containing the generated draft tree.
@@ -81,6 +83,8 @@ message VerifyRequest {
   repeated TokenNode draft_tree    = 3;  // Draft tree to verify.
   string  session_id     = 4;  // Session ID for KV cache reuse across rounds.
                                // If empty, verification is stateless (no caching).
+  float   temperature    = 5;  // Sampling temperature for verification.
+                               // 0.0 = greedy, >0.0 = stochastic rejection sampling.
 }
 
 // Response containing verification results.

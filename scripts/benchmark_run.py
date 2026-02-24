@@ -38,7 +38,7 @@ import uuid
 from dataclasses import dataclass
 from pathlib import Path
 
-from specsplit.core.config import OrchestratorConfig
+from specsplit.core.config import OrchestratorConfig, load_config_file
 from specsplit.core.telemetry import TelemetryLogger
 from specsplit.workers.orchestrator.client import Orchestrator
 
@@ -148,7 +148,9 @@ class BenchmarkOrchestrator:
     def __init__(self, config: OrchestratorConfig, gamma: int) -> None:
         self.config = config
         self.gamma = gamma
-        self._orch = Orchestrator(config=config)
+        # Override max_draft_tokens so the pipeline actually uses this gamma
+        gamma_config = config.model_copy(update={"max_draft_tokens": gamma})
+        self._orch = Orchestrator(config=gamma_config)
         self._telemetry = TelemetryLogger(service_name="benchmark")
 
     def connect(self) -> None:
@@ -174,7 +176,7 @@ class BenchmarkOrchestrator:
             request_id=request_id,
             gamma=self.gamma,
         ):
-            _, result = self._orch.run_with_result(prompt)
+            _, result = self._orch.run_with_result_sync(prompt)
 
         # Use the real tokenizer for prompt length if available
         tokenizer = self._orch._ensure_tokenizer()
@@ -192,7 +194,7 @@ class BenchmarkOrchestrator:
             ttft_ms=round(ttft_ms, 3),
             tpot_ms=round(tpot_ms, 3),
             average_acceptance_rate=round(result.acceptance_rate, 4),
-            total_network_idle_ms=0.0,
+            total_network_idle_ms=round(result.network_idle_ms, 3),
             total_latency_ms=round(result.wall_time_ms, 3),
             num_rounds=result.total_rounds,
         )
@@ -356,6 +358,12 @@ def main() -> None:
         default=None,
         help="Path to export raw telemetry spans (JSON)",
     )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to YAML/JSON config file (same format as client.py --config)",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -371,6 +379,13 @@ def main() -> None:
 
     # ---- Build config overrides ----
     config_overrides: dict = {}
+
+    # Load config file if provided (Issue 13)
+    if args.config:
+        file_cfg = load_config_file(args.config)
+        config_overrides.update(file_cfg.get("orchestrator", {}))
+
+    # CLI args override config file values
     if args.max_rounds is not None:
         config_overrides["max_rounds"] = args.max_rounds
     if args.max_output_tokens is not None:
@@ -411,9 +426,9 @@ def main() -> None:
 
     # ---- Telemetry export (optional) ----
     if args.telemetry_output:
-        # Aggregate telemetry from the last orchestrator instance
-        # (In production, each BenchmarkOrchestrator would export its own spans)
-        logger.info("Telemetry export requested → %s", args.telemetry_output)
+        # Export telemetry from the last orchestrator instance
+        bench_orch._orch.export_telemetry(args.telemetry_output)
+        logger.info("Telemetry exported → %s", args.telemetry_output)
 
     # ---- Summary ----
     print_summary(all_metrics)

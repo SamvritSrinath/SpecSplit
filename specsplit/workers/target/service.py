@@ -14,7 +14,7 @@ from typing import Any
 import grpc
 
 from specsplit.core.config import TargetWorkerConfig
-from specsplit.core.telemetry import TelemetryLogger
+from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.target.engine import TargetEngine
 
@@ -118,10 +118,23 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                     f"draft tree has {num_nodes} nodes, exceeds max_tree_nodes ({self._config.max_tree_nodes})",
                 )
 
+            sw = Stopwatch()
+            sw.start()
             result = self._engine.verify_draft_tree(
                 prompt_ids,
                 draft_tree,
                 session_id=session_id,
+                temperature=request.temperature,
+            )
+            sw.stop()
+
+            # Issue 8: Populate TelemetryMetadata with server-side timing
+            telemetry_meta = spec_decoding_pb2.TelemetryMetadata(
+                span_id=request.request_id,
+                wall_time_ms=sw.elapsed_ms,
+                model_time_ms=sw.elapsed_ms,
+                tokens_processed=num_nodes,
+                device=str(self._engine.device),
             )
 
             response = spec_decoding_pb2.VerifyResponse(
@@ -131,14 +144,17 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                 num_accepted=result.num_accepted,
                 session_id=session_id or "",
                 cache_hit=result.cache_hit,
+                telemetry=telemetry_meta,
             )
 
             logger.info(
-                "VerifyDrafts completed: request_id=%s, session=%s, cache_hit=%s, accepted=%d",
+                "VerifyDrafts completed: request_id=%s, session=%s, cache_hit=%s, "
+                "accepted=%d, model_ms=%.1f",
                 request.request_id,
                 session_id or "none",
                 result.cache_hit,
                 result.num_accepted,
+                sw.elapsed_ms,
             )
             return response
 

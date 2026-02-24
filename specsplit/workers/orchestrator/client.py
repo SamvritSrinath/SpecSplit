@@ -19,6 +19,7 @@ import os
 from typing import Any
 
 import grpc
+import grpc.aio
 
 from specsplit.core.config import OrchestratorConfig, load_config_file
 from specsplit.core.telemetry import TelemetryLogger
@@ -80,20 +81,20 @@ class Orchestrator:
         return self._tokenizer
 
     def connect(self) -> None:
-        """Establish gRPC channels to Draft and Target workers."""
-        self._draft_channel = grpc.insecure_channel(self.config.draft_address)
+        """Establish async gRPC channels to Draft and Target workers."""
+        self._draft_channel = grpc.aio.insecure_channel(self.config.draft_address)
         self._draft_stub = spec_decoding_pb2_grpc.DraftServiceStub(
             self._draft_channel,
         )
 
-        self._target_channel = grpc.insecure_channel(self.config.target_address)
+        self._target_channel = grpc.aio.insecure_channel(self.config.target_address)
         self._target_stub = spec_decoding_pb2_grpc.TargetServiceStub(
             self._target_channel,
         )
 
-        logger.info("gRPC channels established")
+        logger.info("Async gRPC channels established")
 
-    def run_with_result(self, prompt: str) -> tuple[str, PipelineResult]:
+    async def run_with_result(self, prompt: str) -> tuple[str, PipelineResult]:
         """Run the full speculative decoding pipeline for a given prompt.
 
         Tokenizes the prompt, executes the async speculative loop over
@@ -111,17 +112,15 @@ class Orchestrator:
         prompt_ids: list[int] = tokenizer.encode(prompt)
         eos_token_id: int = tokenizer.eos_token_id or 2
 
-        session_id = "" if not self.config.use_target_kv_cache else "default"
+        session_id = None if not self.config.use_target_kv_cache else "default"
         with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
-            result: PipelineResult = asyncio.run(
-                run_speculative_loop_async(
-                    draft_stub=self._draft_stub,
-                    target_stub=self._target_stub,
-                    prompt_ids=prompt_ids,
-                    config=self.config,
-                    session_id=session_id,
-                    eos_token_id=eos_token_id,
-                )
+            result: PipelineResult = await run_speculative_loop_async(
+                draft_stub=self._draft_stub,
+                target_stub=self._target_stub,
+                prompt_ids=prompt_ids,
+                config=self.config,
+                session_id=session_id,
+                eos_token_id=eos_token_id,
             )
 
             output_text = tokenizer.decode(
@@ -139,10 +138,24 @@ class Orchestrator:
 
         return output_text, result
 
+    def run_with_result_sync(self, prompt: str) -> tuple[str, PipelineResult]:
+        """Synchronous wrapper around :meth:`run_with_result`.
+
+        Creates a new event loop and runs the async method to completion.
+        Use this from non-async callers (CLI, benchmarks, etc.).
+
+        Args:
+            prompt: The user's input text prompt.
+
+        Returns:
+            A tuple of (generated output text, PipelineResult with full metrics).
+        """
+        return asyncio.run(self.run_with_result(prompt))
+
     def run(self, prompt: str) -> str:
         """Run the pipeline and return the generated text.
 
-        Thin wrapper around :meth:`run_with_result` for callers that only
+        Thin wrapper around :meth:`run_with_result_sync` for callers that only
         need the output string.
 
         Args:
@@ -151,7 +164,7 @@ class Orchestrator:
         Returns:
             The generated output text.
         """
-        output_text, _ = self.run_with_result(prompt)
+        output_text, _ = self.run_with_result_sync(prompt)
         return output_text
 
     def export_telemetry(self, path: str) -> None:
@@ -254,7 +267,7 @@ def main() -> None:
 
     orch = Orchestrator(config=config, model_name=model_name)
     orch.connect()
-    output_text, result = orch.run_with_result(args.prompt)
+    output_text, result = orch.run_with_result_sync(args.prompt)
 
     print(f"\n{'=' * 60}")
     print("Generated Output:")

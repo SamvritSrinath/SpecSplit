@@ -169,6 +169,11 @@ class OrchestratorConfig(BaseSettings):
         default=False,
         description="If False (naive mode), target verifies statelessly each round — no session KV cache, no flush. Use for testing that orchestrator/draft/target communication works.",
     )
+    temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Sampling temperature for verification. 0.0 = greedy, >0.0 = stochastic rejection sampling.",
+    )
     tokenizer_model: str = Field(
         default="gpt2",
         description="HuggingFace model name for the tokenizer. Must match the target/draft model (e.g. Qwen2/Qwen2.5-7B-Instruct); otherwise acceptance is 0%% and output is gibberish.",

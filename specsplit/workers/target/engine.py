@@ -337,7 +337,11 @@ class TargetEngine:
             logger.debug("Rollback no-op: accepted_depth == seq_len (%d)", accepted_depth)
             return
 
-        # Convert to legacy tuple if needed (DynamicCache, etc.), then crop in place
+        # Convert to legacy tuple if needed (DynamicCache, etc.), then crop in place.
+        # Using slice views WITHOUT .contiguous() avoids O(n) reallocation.
+        # The sliced tensors are views into the original buffer — no copy.
+        # HuggingFace attention handles non-contiguous past_key_values correctly.
+        # For a full zero-copy pre-allocated approach, see StaticKVCache in kv_cache.py.
         rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
         past_kv = _to_legacy_cache(cache.past_key_values)
         if past_kv is None:
@@ -347,8 +351,8 @@ class TargetEngine:
         for layer_key, layer_value in past_kv:
             rolled_back.append(
                 (
-                    layer_key[:, :, :accepted_depth, :].contiguous(),
-                    layer_value[:, :, :accepted_depth, :].contiguous(),
+                    layer_key[:, :, :accepted_depth, :],
+                    layer_value[:, :, :accepted_depth, :],
                 )
             )
         cache.past_key_values = tuple(rolled_back)
@@ -357,7 +361,7 @@ class TargetEngine:
         cache.seq_len = accepted_depth
 
         logger.debug(
-            "KV cache rolled back: session=%s, %d → %d tokens",
+            "KV cache rolled back: session=%s, %d → %d tokens (zero-copy slicing)",
             session_id,
             old_len,
             accepted_depth,

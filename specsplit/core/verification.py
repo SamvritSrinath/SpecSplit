@@ -367,10 +367,14 @@ def verify_stochastic_tree(
             continue
 
         new_path = [*path, node_idx]
+        node_children = children.get(node_idx, [])
         if len(new_path) > len(best_path):
             best_path = new_path
+            # Set divergence to the leaf of the accepted path — the bonus
+            # token is sampled from the target distribution at this node.
+            # Only update if this node is a leaf or if the path is longer.
             best_divergence_node = node_idx
-        for c in children.get(node_idx, []):
+        for c in node_children:
             stack.append((c, new_path))
 
     accepted_tokens = [draft_tokens[i].item() for i in best_path]
