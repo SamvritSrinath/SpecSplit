@@ -279,6 +279,54 @@ class StaticKVCache:
             old_len - self._seq_len,
         )
 
+    def compact(self, keep_indices: list[int]) -> None:
+        """Re-order the cache to keep only specified positions.
+
+        Used for branching tree KV cache compaction where the accepted
+        path contains non-contiguous BFS positions.  Unlike
+        :meth:`rollback`, this performs actual tensor operations
+        (``torch.index_select``), but it is still far cheaper than
+        re-computing the full KV cache from scratch.
+
+        Args:
+            keep_indices: Ordered list of cache positions to retain.
+                Must be valid indices in ``[0, seq_len)``.
+
+        Raises:
+            ValueError: If any index is out of range.
+        """
+        if not keep_indices:
+            self._seq_len = 0
+            logger.debug("KV cache compact: cleared (empty keep_indices)")
+            return
+
+        max_idx = max(keep_indices)
+        if max_idx >= self._seq_len:
+            raise ValueError(
+                f"compact index {max_idx} >= current seq_len {self._seq_len}"
+            )
+
+        idx_tensor = torch.tensor(keep_indices, dtype=torch.long, device=self.device)
+        new_len = len(keep_indices)
+
+        # index_select along the seq_len dimension (dim=3)
+        selected_keys = torch.index_select(self.key_cache, 3, idx_tensor)
+        selected_values = torch.index_select(self.value_cache, 3, idx_tensor)
+
+        # Write back into the pre-allocated buffer
+        self.key_cache[:, :, :, :new_len, :] = selected_keys
+        self.value_cache[:, :, :, :new_len, :] = selected_values
+
+        old_len = self._seq_len
+        self._seq_len = new_len
+
+        logger.debug(
+            "KV cache compact: %d → %d positions (kept %d indices)",
+            old_len,
+            self._seq_len,
+            new_len,
+        )
+
     # ------------------------------------------------------------------ #
     # Retrieval
     # ------------------------------------------------------------------ #

@@ -259,118 +259,116 @@ class DraftEngine:
         cache_state.cached_last_logits = last_logits
 
         # -----------------------------------------------------------------
-        # Task 2.2: True Tree Construction (BFS Level-Order Expansion)
+        # Task 2.2: True Level-Order Batching (Bug 4 Fix)
         # -----------------------------------------------------------------
-        # Fix C1: Batch sibling forward passes. All branches from the same
-        # parent share KV state, so we stack input_ids and expand KV caches
-        # along the batch dimension for a single forward pass per parent.
+        # Process ALL nodes at each depth level in a single forward pass,
+        # instead of one forward pass per parent node. This maximizes GPU
+        # utilization and eliminates the O(n) sequential bottleneck.
         roots: list[TokenNode] = []
 
-        # Queue stores: (parent_node, past_key_values, logits, current_depth)
-        # We start with the prompt's output state. parent_node=None means these will be roots.
-        queue = [(None, past_kv, last_logits, 0)]
+        # Level queue: list of (parent_node, past_key_values, logits)
+        # All entries share the same depth. We start at depth 0.
+        current_level = [(None, past_kv, last_logits)]
 
-        while queue:
-            parent_node, past_kv, logits, depth = queue.pop(0)
+        for depth in range(k):
+            if not current_level:
+                break
 
-            if depth >= k:
-                continue
+            # --- Phase 1: For each entry in current_level, compute top-B tokens ---
+            next_level_entries: list[tuple[TokenNode, Any, torch.Tensor]] = []
 
             # Dynamic Branching Topology:
-            # To prevent exponential explosion (e.g., 2^5 = 32 nodes), we branch heavily
-            # at the root (depth 0), and reduce branching deeper in the tree.
+            # Heavy branching at root, reduce deeper to prevent exponential explosion.
             branching_factor = max(1, num_beams - depth)
 
+            # Collect all (parent_node, token_id, prob, past_kv) for this level
+            expansion_items: list[tuple[TokenNode | None, int, float, Any]] = []
+
             with torch.no_grad():
-                probs = logits_to_probs(logits, temperature=temperature)
+                for parent_node, entry_past_kv, entry_logits in current_level:
+                    probs = logits_to_probs(entry_logits, temperature=temperature)
 
-                if temperature == 0.0:
-                    # Top-B greedy probabilities
-                    top_probs, top_indices = torch.topk(probs, branching_factor, dim=-1)
-                else:
-                    # Top-B stochastic sampling
-                    top_indices = torch.multinomial(probs, num_samples=branching_factor)
-                    top_probs = torch.gather(probs, -1, top_indices)
-
-                # --- C1: Batch all B branches in a single forward pass ---
-                # Stack input_ids: [B, 1]
-                batch_input_ids = top_indices[0, :branching_factor].unsqueeze(1)
-                # Shape: [B, 1]
-
-                # Expand KV cache along batch dimension for B branches
-                if past_kv is not None:
-                    if hasattr(past_kv, "key_cache"):
-                        # DynamicCache: clone and repeat
-                        batch_past_kv = past_kv
-                    elif isinstance(past_kv, tuple):
-                        batch_past_kv = tuple(
-                            tuple(
-                                t.expand(branching_factor, -1, -1, -1) if t.shape[0] == 1 else t
-                                for t in layer
-                            )
-                            for layer in past_kv
-                        )
+                    if temperature == 0.0:
+                        top_probs, top_indices = torch.topk(probs, branching_factor, dim=-1)
                     else:
-                        batch_past_kv = past_kv
-                else:
-                    batch_past_kv = None
+                        top_indices = torch.multinomial(probs, num_samples=branching_factor)
+                        top_probs = torch.gather(probs, -1, top_indices)
 
-                if branching_factor > 1 and batch_past_kv is not None and isinstance(batch_past_kv, tuple):
-                    # Actually expand (copy) the KV cache for the batch
-                    batch_past_kv = tuple(
-                        tuple(
-                            t.repeat(branching_factor, 1, 1, 1) if t.shape[0] == 1 else t
-                            for t in layer
-                        )
-                        for layer in batch_past_kv
+                    for b in range(branching_factor):
+                        token_id_int = top_indices[0, b].item()
+                        prob_val = max(top_probs[0, b].item(), 1e-10)
+                        log_prob = math.log(prob_val)
+                        expansion_items.append((parent_node, token_id_int, log_prob, entry_past_kv))
+
+            if not expansion_items:
+                break
+
+            # --- Phase 2: Batch ALL expansion items into a single forward pass ---
+            total_items = len(expansion_items)
+            batch_input_ids = torch.tensor(
+                [[item[1]] for item in expansion_items],
+                dtype=torch.long,
+                device=self.device,
+            )
+            # Shape: [total_items, 1]
+
+            # Stack KV caches along batch dimension
+            first_kv = expansion_items[0][3]
+            if first_kv is not None and isinstance(first_kv, tuple):
+                batch_past_kv = tuple(
+                    tuple(
+                        torch.cat([
+                            expansion_items[j][3][layer_idx][t_idx]
+                            if expansion_items[j][3][layer_idx][t_idx].shape[0] == 1
+                            else expansion_items[j][3][layer_idx][t_idx][:1]
+                            for j in range(total_items)
+                        ], dim=0)
+                        for t_idx in range(2)  # key, value
                     )
+                    for layer_idx in range(len(first_kv))
+                )
+            elif first_kv is not None and hasattr(first_kv, "key_cache"):
+                # DynamicCache — fall back to expanding
+                batch_past_kv = first_kv
+            else:
+                batch_past_kv = None
 
+            with torch.no_grad():
                 step_out = self._model(
                     input_ids=batch_input_ids,
                     past_key_values=batch_past_kv,
                     use_cache=True,
                 )
-                # step_out.logits: [B, 1, vocab_size]
-                # step_out.past_key_values: batched KV cache
+            # step_out.logits: [total_items, 1, vocab_size]
+            # step_out.past_key_values: batched KV cache
 
-                # Expand each selected branch from the batched output
-                for i in range(branching_factor):
-                    token_id_int = top_indices[0, i].item()
+            # --- Phase 3: Unpack and create TokenNodes, populate next_level ---
+            for i, (parent_node, token_id_int, log_prob, _) in enumerate(expansion_items):
+                child_node = TokenNode(token_id=token_id_int, log_prob=log_prob)
 
-                    # Issue 27: Store true log(p) without epsilon
-                    prob_val = max(top_probs[0, i].item(), 1e-10)
-                    log_prob = math.log(prob_val)
+                if parent_node is None:
+                    roots.append(child_node)
+                else:
+                    parent_node.children.append(child_node)
 
-                    child_node = TokenNode(token_id=token_id_int, log_prob=log_prob)
+                # Extract this item's KV cache from the batched output
+                if isinstance(step_out.past_key_values, tuple):
+                    branch_past_kv = tuple(
+                        tuple(t[i : i + 1] for t in layer)
+                        for layer in step_out.past_key_values
+                    )
+                elif hasattr(step_out.past_key_values, "__getitem__"):
+                    branch_past_kv = step_out.past_key_values
+                else:
+                    branch_past_kv = step_out.past_key_values
 
-                    if parent_node is None:
-                        roots.append(child_node)
-                    else:
-                        parent_node.children.append(child_node)
+                next_level_entries.append((
+                    child_node,
+                    branch_past_kv,
+                    step_out.logits[i : i + 1, -1, :],
+                ))
 
-                    # Extract this branch's KV cache from the batched output
-                    if branching_factor == 1:
-                        branch_past_kv = step_out.past_key_values
-                    else:
-                        # Slice the i-th batch element's KV cache
-                        if isinstance(step_out.past_key_values, tuple):
-                            branch_past_kv = tuple(
-                                tuple(t[i : i + 1] for t in layer)
-                                for layer in step_out.past_key_values
-                            )
-                        elif hasattr(step_out.past_key_values, "__getitem__"):
-                            # DynamicCache or similar — fall back to clone
-                            branch_past_kv = step_out.past_key_values
-                        else:
-                            branch_past_kv = step_out.past_key_values
-
-                    # Add child to the queue to expand next depth
-                    queue.append((
-                        child_node,
-                        branch_past_kv,
-                        step_out.logits[i : i + 1, -1, :],
-                        depth + 1,
-                    ))
+            current_level = next_level_entries
 
         return roots
 

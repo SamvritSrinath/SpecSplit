@@ -14,6 +14,7 @@ from specsplit.workers.target.engine import (
     VerificationResult,
     _flatten_tree,
 )
+from specsplit.workers.target.kv_cache import StaticKVCache
 
 
 @pytest.fixture
@@ -26,6 +27,28 @@ def target_engine() -> TargetEngine:
         max_sessions=3,
     )
     return TargetEngine(config=config)
+
+
+@pytest.fixture
+def fake_static_kv_cache() -> StaticKVCache:
+    """A StaticKVCache with 2 layers, 4 heads, max_seq_len=64, head_dim=8.
+
+    Pre-populated with 10 random entries to simulate an in-use cache.
+    """
+    cache = StaticKVCache(
+        num_layers=2,
+        num_heads=4,
+        max_seq_len=64,
+        head_dim=8,
+        batch_size=1,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+    )
+    # Populate with 10 positions of random data
+    keys = torch.randn(2, 1, 4, 10, 8)
+    values = torch.randn(2, 1, 4, 10, 8)
+    cache.append(keys, values)
+    return cache
 
 
 @pytest.fixture
@@ -59,6 +82,14 @@ def _make_mock_target_model(
     model.eval.return_value = model
     model.to.return_value = model
 
+    # Add model config for StaticKVCache initialization
+    model.config = MagicMock()
+    model.config.num_hidden_layers = 2
+    model.config.num_attention_heads = 4
+    model.config.num_key_value_heads = 4
+    model.config.hidden_size = 32  # 4 heads * 8 head_dim
+    model.config.max_position_embeddings = 512
+
     accept_list = accept_tokens or []
 
     def fake_forward(
@@ -81,9 +112,13 @@ def _make_mock_target_model(
         # Fake KV cache
         cache_len = seq_len
         if past_key_values is not None:
-            cache_len += past_key_values[0][0].shape[2]
+            if isinstance(past_key_values, tuple):
+                cache_len += past_key_values[0][0].shape[2]
+            elif hasattr(past_key_values, "seq_len"):
+                cache_len += past_key_values.seq_len
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -236,57 +271,53 @@ class TestSessionManagement:
 
 
 class TestRollbackCache:
-    """Tests for rollback_cache — cropping KV tensors to accepted prefix."""
+    """Tests for rollback_cache — using StaticKVCache O(1) rollback and compact."""
 
     def test_rollback_crops_tensors(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: StaticKVCache,
     ) -> None:
-        """Rollback should slice each layer's K/V to accepted_depth."""
+        """Rollback should set the StaticKVCache seq_len to accepted_depth."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=6)
 
         assert cache.seq_len == 6
-        for layer_k, layer_v in cache.past_key_values:
-            assert layer_k.shape[2] == 6
-            assert layer_v.shape[2] == 6
+        assert cache.cache.seq_len == 6
 
     def test_rollback_to_zero(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: StaticKVCache,
     ) -> None:
-        """Rolling back to 0 should produce zero-length seq dim."""
+        """Rolling back to 0 should set seq_len to 0."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=0)
         assert cache.seq_len == 0
-        for layer_k, _layer_v in cache.past_key_values:
-            assert layer_k.shape[2] == 0
+        assert cache.cache.seq_len == 0
 
     def test_rollback_noop_same_depth(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: StaticKVCache,
     ) -> None:
         """Rollback to current seq_len should be a no-op."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=10)
         assert cache.seq_len == 10
-        for layer_k, _ in cache.past_key_values:
-            assert layer_k.shape[2] == 10
+        assert cache.cache.seq_len == 10
 
     def test_rollback_no_cache_state(self, target_engine: TargetEngine) -> None:
-        """Rollback on a session with no past_key_values should reset to 0."""
+        """Rollback on a session with no StaticKVCache should reset to 0."""
         target_engine.get_or_create_session("sess-1")
         target_engine.rollback_cache("sess-1", accepted_depth=0)
         assert target_engine._session_caches["sess-1"].seq_len == 0
@@ -298,10 +329,10 @@ class TestRollbackCache:
     def test_rollback_exceeds_seq_len_raises(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: StaticKVCache,
     ) -> None:
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         with pytest.raises(ValueError, match="exceeds cached seq_len"):
@@ -310,20 +341,41 @@ class TestRollbackCache:
     def test_rollback_preserves_data(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: StaticKVCache,
     ) -> None:
         """The cropped prefix should contain the original data, not zeros."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
-        # Save original first 4 positions of layer 0 key
-        original_prefix = fake_kv_cache[0][0][:, :, :4, :].clone()
+        # Save original first 4 positions
+        original_keys = fake_static_kv_cache.get_all_kv()[0][0][:, :, :4, :].clone()
 
         target_engine.rollback_cache("sess-1", accepted_depth=4)
 
-        rolled_back_key = cache.past_key_values[0][0]
-        assert torch.allclose(rolled_back_key, original_prefix)
+        # After rollback, the first 4 positions should be preserved
+        rolled_keys = cache.cache.get_all_kv()[0][0][:, :, :4, :]
+        assert torch.allclose(rolled_keys, original_keys)
+
+    def test_compact_non_contiguous(
+        self,
+        target_engine: TargetEngine,
+        fake_static_kv_cache: StaticKVCache,
+    ) -> None:
+        """Compact with non-contiguous indices for branching tree rollback."""
+        cache, _ = target_engine.get_or_create_session("sess-1")
+        cache.cache = fake_static_kv_cache
+        cache.seq_len = 10
+
+        # Keep prefix (0-4) + selected tree positions (6, 8)
+        target_engine.rollback_cache(
+            "sess-1",
+            accepted_depth=7,  # Not used when tree_indices provided
+            accepted_tree_indices=[1, 3],
+            prefix_length=5,
+        )
+        # Should keep: [0,1,2,3,4] (prefix) + [5+1, 5+3] = [0,1,2,3,4,6,8] = 7 positions
+        assert cache.seq_len == 7
 
 
 # =========================================================================
@@ -527,6 +579,8 @@ class TestVerifyWithMockedModel:
             bonus_token=99,
             num_accepted=2,
             accepted_leaf_index=1,
+            diverged=True,
+            accepted_indices=[0, 1],
         )
         mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
         mock_tokenizer_cls.return_value = _make_mock_tokenizer()
@@ -566,6 +620,8 @@ class TestVerifyWithMockedModel:
             bonus_token=99,
             num_accepted=2,
             accepted_leaf_index=1,
+            diverged=True,
+            accepted_indices=[0, 1],
         )
         mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
         mock_tokenizer_cls.return_value = _make_mock_tokenizer()

@@ -7,12 +7,12 @@ distribution.
 
 Architecture Notes:
     - **Session-based KV caching**: Maintains a ``dict[session_id, KVCacheState]``
-      mapping that stores HuggingFace ``past_key_values`` per session. This
-      eliminates prompt recomputation across verification rounds within the
-      same generation session.
-    - After verification, ``rollback_cache`` crops the KV cache back to the
-      longest accepted prefix so that rejected speculative tokens do not
-      pollute future forward passes.
+      mapping that stores pre-allocated :class:`StaticKVCache` per session.
+      This eliminates prompt recomputation and ``torch.cat`` reallocation
+      across verification rounds within the same generation session.
+    - After verification, ``rollback_cache`` uses ``StaticKVCache.rollback()``
+      (O(1) pointer update) for linear chains, or ``StaticKVCache.compact()``
+      for branching trees, to crop the cache to the accepted prefix.
     - Uses greedy verification: for each position in the tree, if
       ``argmax(target_logits)`` matches the drafted token, it is accepted.
 """
@@ -31,7 +31,12 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch
-from specsplit.core.verification import verify_greedy_tree, verify_stochastic_tree
+from specsplit.core.verification import (
+    VerificationResult as CoreVerificationResult,
+    verify_greedy_tree,
+    verify_stochastic_tree,
+)
+from specsplit.workers.target.kv_cache import StaticKVCache
 from specsplit.workers.target.tree_attn import (
     bool_mask_to_float,
     build_tree_attention,
@@ -71,13 +76,13 @@ class VerificationResult:
 class KVCacheState:
     """Per-session KV cache state stored on the Target Worker.
 
-    Wraps the HuggingFace ``past_key_values`` tuple and tracks the
-    sequence length so we know where to crop on rollback.
+    Wraps a :class:`StaticKVCache` providing O(1) rollback and
+    zero-copy slice-assignment appends.
 
     Attributes:
-        past_key_values: The HuggingFace ``past_key_values`` tuple.
-            Each element is a ``(key, value)`` pair of tensors with shape
-            ``(batch, num_heads, seq_len, head_dim)``.
+        cache: The pre-allocated static KV cache for this session,
+            or ``None`` if the session was created before the model
+            was loaded.
         seq_len: The current cached sequence length (number of tokens
             whose KV projections are stored).
         next_root_logit: The logit predicting the token directly following the
@@ -85,7 +90,7 @@ class KVCacheState:
             upon a cache hit without duplicate forwarding.
     """
 
-    past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None
+    cache: StaticKVCache | None = None
     seq_len: int = 0
     next_root_logit: torch.Tensor | None = None
     last_accessed: float = 0.0  # D3: timestamp for TTL garbage collection
@@ -120,22 +125,6 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
             if getattr(layer, "is_initialized", True) and getattr(layer, "keys", None) is not None
         )
     return None
-
-
-def _cache_seq_len(past_key_values: Any) -> int:
-    """Return the cached sequence length from HuggingFace past_key_values.
-
-    Supports both the legacy tuple format (tuple of (key, value) per layer)
-    and the Cache API (e.g. DynamicCache) used by newer models (Qwen2, etc.).
-    """
-    if past_key_values is None:
-        return 0
-    if hasattr(past_key_values, "get_seq_length"):
-        return int(past_key_values.get_seq_length())
-    legacy = _to_legacy_cache(past_key_values)
-    if legacy is None or len(legacy) == 0:
-        return 0
-    return int(legacy[0][0].shape[2])
 
 
 def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:
@@ -187,6 +176,11 @@ class TargetEngine:
     projections across verification rounds within the same generation
     session.  After each verification, the cache is rolled back to the
     longest accepted prefix via ``rollback_cache()``.
+
+    The KV cache uses :class:`StaticKVCache` — a pre-allocated, pointer-
+    based cache that provides O(1) rollback and zero-copy appends, compared
+    to HuggingFace's default ``DynamicCache`` which requires ``torch.cat``
+    on every append.
 
     Args:
         config: Target worker configuration (model name, device, etc.).
@@ -263,6 +257,43 @@ class TargetEngine:
         logger.info("Target model loaded: %s on %s", self.config.model_name, self.device)
 
     # --------------------------------------------------------------------- #
+    # StaticKVCache factory
+    # --------------------------------------------------------------------- #
+
+    def _create_static_cache(self) -> StaticKVCache:
+        """Create a StaticKVCache initialized from the loaded model's config.
+
+        Extracts ``num_hidden_layers``, ``num_key_value_heads`` (for GQA models)
+        or ``num_attention_heads``, ``hidden_size``, and ``max_position_embeddings``
+        from the model config to size the pre-allocated buffers.
+
+        Returns:
+            A fresh :class:`StaticKVCache` sized for this model.
+
+        Raises:
+            RuntimeError: If the model has not been loaded.
+        """
+        if not self._is_loaded or self._model is None:
+            raise RuntimeError("Cannot create StaticKVCache before model is loaded.")
+
+        cfg = self._model.config
+        num_layers = cfg.num_hidden_layers
+        # GQA models (Llama, Qwen2, Mistral) use num_key_value_heads
+        num_heads = getattr(cfg, "num_key_value_heads", cfg.num_attention_heads)
+        head_dim = cfg.hidden_size // cfg.num_attention_heads
+        max_seq_len = getattr(cfg, "max_position_embeddings", 4096)
+
+        return StaticKVCache(
+            num_layers=num_layers,
+            num_heads=num_heads,
+            max_seq_len=max_seq_len,
+            head_dim=head_dim,
+            batch_size=1,
+            dtype=torch.float16,
+            device=self.device,
+        )
+
+    # --------------------------------------------------------------------- #
     # Session management
     # --------------------------------------------------------------------- #
 
@@ -296,7 +327,9 @@ class TargetEngine:
                 "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
             )
 
-        cache = KVCacheState(last_accessed=time.time())
+        # Create a new session with a StaticKVCache
+        static_cache = self._create_static_cache() if self._is_loaded else None
+        cache = KVCacheState(cache=static_cache, last_accessed=time.time())
         self._session_caches[session_id] = cache
         self._session_locks[session_id] = threading.Lock()
         logger.debug("Session cache created: %s", session_id)
@@ -322,7 +355,7 @@ class TargetEngine:
             cache = self._session_caches.pop(session_id, None)
             if cache is not None:
                 # Explicitly delete tensors to free GPU memory
-                cache.past_key_values = None
+                cache.cache = None
                 cache.next_root_logit = None
                 logger.info("Session ended and cache released: %s", session_id)
                 return True
@@ -366,7 +399,7 @@ class TargetEngine:
             cache = self._session_caches.pop(sid, None)
             self._session_locks.pop(sid, None)
             if cache is not None:
-                cache.past_key_values = None
+                cache.cache = None
                 cache.next_root_logit = None
         if stale_ids:
             logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(stale_ids), ttl, stale_ids)
@@ -385,18 +418,15 @@ class TargetEngine:
     ) -> None:
         """Compact the KV cache to only the accepted prefix + accepted path.
 
-        For **linear chains** (no branching), a simple sequence slice is
-        sufficient.  For **branching trees**, the BFS-flat KV positions
-        contain rejected sibling nodes interspersed with accepted ones.
-        In that case, ``accepted_tree_indices`` specifies exactly which
-        tree positions to keep, and we use ``torch.index_select`` to
-        compact the cache.
+        Uses :class:`StaticKVCache` for O(1) rollback (linear chains)
+        or ``compact()`` (branching trees with non-contiguous accepted
+        positions).
 
         Args:
             session_id: The session whose cache to roll back.
             accepted_depth: Total number of tokens in the accepted prefix
                 (measured from the start of the full cached sequence).
-                Used for simple-slice fallback when ``accepted_tree_indices``
+                Used for simple O(1) rollback when ``accepted_tree_indices``
                 is None.
             accepted_tree_indices: BFS indices (0-based into the tree
                 portion of the input) of the accepted path nodes, in
@@ -413,70 +443,45 @@ class TargetEngine:
         if session_id not in self._session_caches:
             raise KeyError(f"No active session with id={session_id!r}")
 
-        cache = self._session_caches[session_id]
+        cache_state = self._session_caches[session_id]
 
-        if cache.past_key_values is None:
+        if cache_state.cache is None:
             logger.debug("Rollback no-op: session %s has no cached KV state", session_id)
-            cache.seq_len = 0
+            cache_state.seq_len = 0
             return
 
-        if accepted_depth > cache.seq_len:
+        if accepted_depth > cache_state.seq_len:
             raise ValueError(
-                f"accepted_depth={accepted_depth} exceeds cached seq_len={cache.seq_len} "
+                f"accepted_depth={accepted_depth} exceeds cached seq_len={cache_state.seq_len} "
                 f"for session {session_id!r}"
             )
 
-        if accepted_depth == cache.seq_len and accepted_tree_indices is None:
+        if accepted_depth == cache_state.seq_len and accepted_tree_indices is None:
             logger.debug("Rollback no-op: accepted_depth == seq_len (%d)", accepted_depth)
             return
 
-        past_kv = _to_legacy_cache(cache.past_key_values)
-        if past_kv is None:
-            cache.past_key_values = None
-            cache.seq_len = 0
-            return
-
         if accepted_tree_indices is not None and len(accepted_tree_indices) > 0:
-            # --- Branching tree compaction via index_select ---
-            # Build the full index list: prefix positions + accepted tree positions
+            # --- Branching tree compaction via StaticKVCache.compact() ---
             prefix_indices = list(range(prefix_length))
             tree_global_indices = [prefix_length + i for i in accepted_tree_indices]
             keep_indices = prefix_indices + tree_global_indices
 
-            device = past_kv[0][0].device
-            idx_tensor = torch.tensor(keep_indices, dtype=torch.long, device=device)
-
-            rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
-            for layer_key, layer_value in past_kv:
-                # layer_key shape: [batch, heads, seq_len, head_dim]
-                new_key = torch.index_select(layer_key, 2, idx_tensor)
-                new_value = torch.index_select(layer_value, 2, idx_tensor)
-                rolled_back.append((new_key.contiguous(), new_value.contiguous()))
-
-            cache.past_key_values = tuple(rolled_back)
+            cache_state.cache.compact(keep_indices)
             new_seq_len = len(keep_indices)
         else:
-            # --- Simple slice fallback (linear chains, no branching) ---
-            rolled_back = []
-            for layer_key, layer_value in past_kv:
-                rolled_back.append(
-                    (
-                        layer_key[:, :, :accepted_depth, :],
-                        layer_value[:, :, :accepted_depth, :],
-                    )
-                )
-            cache.past_key_values = tuple(rolled_back)
+            # --- O(1) pointer-based rollback for linear chains ---
+            cache_state.cache.rollback(accepted_depth)
             new_seq_len = accepted_depth
 
-        old_len = cache.seq_len
-        cache.seq_len = new_seq_len
+        old_len = cache_state.seq_len
+        cache_state.seq_len = new_seq_len
 
         logger.debug(
             "KV cache rolled back: session=%s, %d → %d tokens%s",
             session_id,
             old_len,
             new_seq_len,
-            " (index_select compaction)" if accepted_tree_indices else " (simple slice)",
+            " (compact)" if accepted_tree_indices else " (O(1) rollback)",
         )
 
     # --------------------------------------------------------------------- #
@@ -546,13 +551,13 @@ class TargetEngine:
             num_tree_nodes = len(flat_token_ids)
 
             # --- Step 2: Determine what to feed the model ---
-            past_kv = cache_state.past_key_values if cache_state else None
+            # Extract cached KV from StaticKVCache if available
+            past_kv = None
             prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
 
-            if cache_hit and prefix_length > 0:
-                # Cache hit: only feed the new draft tokens.
-                # We explicitly DO NOT append prompt_ids[-1] to avoid duplicate
-                # tokens corrupting the target KV Cache.
+            if cache_hit and prefix_length > 0 and cache_state and cache_state.cache is not None:
+                # Cache hit: get KV tensors from StaticKVCache
+                past_kv = cache_state.cache.get_all_kv()
                 input_token_ids = flat_token_ids
             else:
                 # No cache (or first call): feed prompt + draft tokens
@@ -598,13 +603,28 @@ class TargetEngine:
                     use_cache=True,
                 )
 
-            # --- Step 5: Update session cache ---
-            new_past_kv = _to_legacy_cache(outputs.past_key_values)
-            new_seq_len = int(new_past_kv[0][0].shape[2]) if new_past_kv else 0
+            # --- Step 5: Update session cache with StaticKVCache ---
+            if cache_state is not None and cache_state.cache is not None:
+                # Convert HF output to 5D tensors and append to StaticKVCache
+                hf_past_kv = _to_legacy_cache(outputs.past_key_values)
+                if hf_past_kv is not None:
+                    # The HF model returns the FULL past_key_values including
+                    # what we fed in. We need only the NEW positions.
+                    full_seq_len = hf_past_kv[0][0].shape[2]
+                    new_start = cache_state.cache.seq_len
+                    new_token_count = full_seq_len - new_start
 
-            if cache_state is not None:
-                cache_state.past_key_values = new_past_kv
-                cache_state.seq_len = new_seq_len
+                    if new_token_count > 0:
+                        # Extract only the new KV entries
+                        new_keys_list = [layer[0][:, :, new_start:, :] for layer in hf_past_kv]
+                        new_values_list = [layer[1][:, :, new_start:, :] for layer in hf_past_kv]
+                        new_keys = torch.stack(new_keys_list, dim=0)
+                        new_values = torch.stack(new_values_list, dim=0)
+                        cache_state.cache.append(new_keys, new_values)
+
+                    cache_state.seq_len = cache_state.cache.seq_len
+                else:
+                    cache_state.seq_len = 0
 
             # --- Step 6: Extract tree-position logits and verify ---
             # all_logits[j] predicts the token at position j+1 (causal LM semantics).
@@ -666,17 +686,14 @@ class TargetEngine:
             num_accepted = result_data.num_accepted
             leaf_idx = result_data.accepted_leaf_index
 
-            # Fix A3: When the full path to a leaf was accepted, the bonus token
-            # from both greedy and stochastic verification is sampled from
-            # tree_logits[leaf], which predicts the LEAF token itself (duplicate).
-            # The correct bonus is the NEXT token after the leaf:
-            #   greedy  → argmax(all_logits[base + leaf])
-            #   stochastic → multinomial(softmax(all_logits[base + leaf] / T))
-            if (
-                num_accepted > 0
-                and leaf_idx >= 0
-                and result_data.bonus_token == accepted_ids[-1]
-            ):
+            # Fix A3 / Bug 2: When the full path to a leaf was accepted
+            # (diverged=False), the bonus token from tree_logits[leaf] predicts
+            # the LEAF token itself (duplicate). The correct bonus is the NEXT
+            # token after the leaf, sampled from all_logits[base + leaf].
+            # Using the explicit `diverged` flag instead of the old hacky
+            # comparison (bonus_token == accepted_ids[-1]) which breaks
+            # under stochastic sampling.
+            if not result_data.diverged and num_accepted > 0 and leaf_idx >= 0:
                 next_logits = all_logits[0, base + leaf_idx, :]
                 if temperature > 0.0:
                     next_probs = torch.softmax(next_logits / temperature, dim=-1)
@@ -703,14 +720,20 @@ class TargetEngine:
                     with torch.no_grad():
                         correction_output = self._model(
                             input_ids=correction_input,
-                            past_key_values=cache_state.past_key_values,
+                            past_key_values=cache_state.cache.get_all_kv() if cache_state.cache else None,
                             use_cache=True,
                         )
-                    corr_past_kv = _to_legacy_cache(correction_output.past_key_values)
-                    cache_state.past_key_values = corr_past_kv
-                    cache_state.seq_len = (
-                        int(corr_past_kv[0][0].shape[2]) if corr_past_kv else 0
-                    )
+                    # Append correction token's KV to the StaticKVCache
+                    corr_hf = _to_legacy_cache(correction_output.past_key_values)
+                    if corr_hf is not None and cache_state.cache is not None:
+                        corr_full_len = corr_hf[0][0].shape[2]
+                        corr_start = cache_state.cache.seq_len
+                        corr_new = corr_full_len - corr_start
+                        if corr_new > 0:
+                            corr_keys = torch.stack([l[0][:, :, corr_start:, :] for l in corr_hf], dim=0)
+                            corr_values = torch.stack([l[1][:, :, corr_start:, :] for l in corr_hf], dim=0)
+                            cache_state.cache.append(corr_keys, corr_values)
+                        cache_state.seq_len = cache_state.cache.seq_len
                     cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
                 else:
                     if num_accepted > 0:

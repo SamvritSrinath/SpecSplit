@@ -30,7 +30,7 @@ result extraction.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import torch
 
@@ -38,13 +38,13 @@ logger = logging.getLogger(__name__)
 
 
 # ============================================================================
-# Result Dataclass
+# Unified Result Dataclass
 # ============================================================================
 
 
 @dataclass(frozen=True)
-class GreedyVerificationResult:
-    """Result of greedy tree verification.
+class VerificationResult:
+    """Unified result for both greedy and stochastic tree verification.
 
     Attributes:
         accepted_leaf_index: The local tree-node index of the last
@@ -52,15 +52,19 @@ class GreedyVerificationResult:
             were accepted, this is ``-1``.
         accepted_tokens: Ordered list of accepted token IDs along the
             longest accepted path (root → leaf).
-        bonus_token: The target model's greedy choice at the divergence
-            point (i.e., the token that *would* follow the accepted
-            prefix).  This is always produced — it extends the output
-            by one token for free.
+        bonus_token: The target model's greedy/sampled choice at the
+            divergence point (i.e., the token that *would* follow the
+            accepted prefix).  This is always produced — it extends the
+            output by one token for free.
         accepted_indices: The local tree-node indices of the accepted
             nodes, in path order (root → leaf).  Useful for KV cache
             rollback and position tracking.
         num_draft_tokens: Total number of draft tokens in the tree
             (for computing acceptance rate).
+        diverged: Whether the path ended at a rejection point (True)
+            or was fully accepted to a leaf node (False).  Used by
+            the TargetEngine to correctly sample the bonus token from
+            the right logit position.
     """
 
     accepted_leaf_index: int
@@ -68,6 +72,7 @@ class GreedyVerificationResult:
     bonus_token: int
     accepted_indices: list[int]
     num_draft_tokens: int
+    diverged: bool
 
     @property
     def num_accepted(self) -> int:
@@ -95,7 +100,7 @@ def verify_greedy_tree(
     draft_tokens: torch.Tensor,
     target_logits: torch.Tensor,
     topology_map: list[int],
-) -> GreedyVerificationResult:
+) -> VerificationResult:
     """Verify a draft token tree against target logits using greedy decoding.
 
     All comparisons are performed on-device.  The only CPU↔GPU sync
@@ -114,7 +119,7 @@ def verify_greedy_tree(
             Length: ``num_tree_nodes``.
 
     Returns:
-        A :class:`GreedyVerificationResult` with the longest accepted path,
+        A :class:`VerificationResult` with the longest accepted path,
         the bonus token, and metadata.
 
     Raises:
@@ -154,12 +159,13 @@ def verify_greedy_tree(
     # --- Handle empty tree ---
     if num_tree_nodes == 0:
         logger.debug("Empty draft tree — nothing to verify")
-        return GreedyVerificationResult(
+        return VerificationResult(
             accepted_leaf_index=-1,
             accepted_tokens=[],
             bonus_token=-1,
             accepted_indices=[],
             num_draft_tokens=0,
+            diverged=True,
         )
 
     # ------------------------------------------------------------------
@@ -205,6 +211,7 @@ def verify_greedy_tree(
     # Each stack entry is (node_index, current_path).
     best_path: list[int] = []
     best_divergence_node: int = -1  # Node where we extract the bonus token
+    best_diverged: bool = True  # Whether the best path ended at a rejection
 
     # Stack entries: (node_index, path_so_far)
     stack: list[tuple[int, list[int]]] = [(r, []) for r in roots]
@@ -218,6 +225,7 @@ def verify_greedy_tree(
             if len(path) > len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
+                best_diverged = True
             continue
 
         # Node is accepted — extend the path
@@ -231,6 +239,7 @@ def verify_greedy_tree(
                 # the target's prediction at this leaf position.  We use
                 # the target's argmax at this leaf as the "next" token.
                 best_divergence_node = node_idx
+                best_diverged = False  # Fully accepted to leaf
         else:
             # Internal node — continue DFS into children
             for child_idx in children[node_idx]:
@@ -254,40 +263,34 @@ def verify_greedy_tree(
 
     accepted_leaf_index = best_path[-1] if best_path else -1
 
-    result = GreedyVerificationResult(
+    result = VerificationResult(
         accepted_leaf_index=accepted_leaf_index,
         accepted_tokens=accepted_tokens,
         bonus_token=bonus_token,
         accepted_indices=list(best_path),
         num_draft_tokens=num_tree_nodes,
+        diverged=best_diverged,
     )
 
     logger.debug(
-        "Greedy verification: %d/%d accepted (%.1f%%), bonus_token=%d, leaf_idx=%d",
+        "Greedy verification: %d/%d accepted (%.1f%%), bonus_token=%d, leaf_idx=%d, diverged=%s",
         result.num_accepted,
         num_tree_nodes,
         result.acceptance_rate * 100,
         bonus_token,
         accepted_leaf_index,
+        best_diverged,
     )
 
     return result
 
-@dataclass
-class VerificationResultData:
-    """Standardized result for both greedy and stochastic verification."""
-    accepted_tokens: list[int]
-    bonus_token: int
-    num_accepted: int
-    accepted_leaf_index: int
-    accepted_indices: list[int] = None  # BFS indices of accepted nodes (for KV cache compaction)
 
 def verify_stochastic_tree(
     draft_tokens: torch.Tensor,
     draft_probs: torch.Tensor,
     target_probs: torch.Tensor,
     topology_map: list[int],
-) -> VerificationResultData:
+) -> VerificationResult:
     """Perform stochastic verification with rejection sampling over the full tree.
 
     Explores all root-to-leaf paths via DFS. At each node, the draft token is
@@ -304,7 +307,7 @@ def verify_stochastic_tree(
         topology_map: List mapping node index to parent index (-1 for root).
 
     Returns:
-        VerificationResultData with the longest accepted path and sampled bonus token.
+        VerificationResult with the longest accepted path and sampled bonus token.
 
     Raises:
         ValueError: If shapes are inconsistent or the tree has no root nodes.
@@ -327,11 +330,13 @@ def verify_stochastic_tree(
         )
 
     if num_tree_nodes == 0:
-        return VerificationResultData(
+        return VerificationResult(
+            accepted_leaf_index=-1,
             accepted_tokens=[],
             bonus_token=-1,
-            num_accepted=0,
-            accepted_leaf_index=-1,
+            accepted_indices=[],
+            num_draft_tokens=0,
+            diverged=True,
         )
 
     children: dict[int, list[int]] = {}
@@ -343,6 +348,7 @@ def verify_stochastic_tree(
 
     best_path: list[int] = []
     best_divergence_node = -1
+    best_diverged: bool = True
     stack: list[tuple[int, list[int]]] = [(r, []) for r in roots]
 
     while stack:
@@ -362,6 +368,7 @@ def verify_stochastic_tree(
             if len(path) >= len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
+                best_diverged = True
             elif best_divergence_node < 0:
                 # Rejection at root or first node: use this node for bonus sampling.
                 best_divergence_node = node_idx
@@ -369,14 +376,20 @@ def verify_stochastic_tree(
 
         new_path = [*path, node_idx]
         node_children = children.get(node_idx, [])
-        if len(new_path) > len(best_path):
-            best_path = new_path
-            # Set divergence to the leaf of the accepted path — the bonus
-            # token is sampled from the target distribution at this node.
-            # Only update if this node is a leaf or if the path is longer.
-            best_divergence_node = node_idx
-        for c in node_children:
-            stack.append((c, new_path))
+
+        if not node_children:
+            # Leaf node — fully accepted path
+            if len(new_path) > len(best_path):
+                best_path = new_path
+                best_divergence_node = node_idx
+                best_diverged = False  # Fully accepted to leaf
+        else:
+            if len(new_path) > len(best_path):
+                best_path = new_path
+                best_divergence_node = node_idx
+                best_diverged = False  # Tentatively not diverged (may update)
+            for c in node_children:
+                stack.append((c, new_path))
 
     accepted_tokens = [draft_tokens[i].item() for i in best_path]
     if best_divergence_node >= 0:
@@ -385,10 +398,11 @@ def verify_stochastic_tree(
     else:
         bonus_token = -1
     current_node = best_path[-1] if best_path else -1
-    return VerificationResultData(
+    return VerificationResult(
         accepted_tokens=accepted_tokens,
         bonus_token=bonus_token,
-        num_accepted=len(accepted_tokens),
+        num_draft_tokens=num_tree_nodes,
         accepted_leaf_index=current_node,
         accepted_indices=list(best_path),
+        diverged=best_diverged,
     )

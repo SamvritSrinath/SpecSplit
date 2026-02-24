@@ -564,10 +564,15 @@ async def run_speculative_loop_async(
             delta_token_ids = None
 
         # Create concurrent tasks
+        # Bug 3 fix: When delta_token_ids is populated, send an empty
+        # prompt_token_ids to avoid redundantly transmitting the full
+        # context. The target service's session cache already has the
+        # prefix and only needs the new tokens.
+        verify_context = [] if delta_token_ids else current_context
         verify_task = asyncio.create_task(
             _call_verify_drafts(
                 target_stub,
-                current_context,
+                verify_context,
                 current_draft,
                 session_id,
                 cfg,

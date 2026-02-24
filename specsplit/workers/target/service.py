@@ -105,7 +105,16 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             session_id=session_id or "stateless",
         ):
             prompt_ids: list[int] = list(request.prompt_token_ids)
-            if len(prompt_ids) > self._config.max_prompt_tokens:
+            new_ids: list[int] = list(request.new_token_ids)
+
+            # Bug 3: Delta-only mode — when prompt_token_ids is empty but
+            # new_token_ids is populated, the orchestrator is sending only
+            # the delta. The target engine's session cache already has the
+            # prefix and only needs the new tokens appended.
+            if not prompt_ids and new_ids:
+                prompt_ids = new_ids
+
+            if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
                 context.abort(
                     grpc.StatusCode.INVALID_ARGUMENT,
                     f"prompt length {len(prompt_ids)} exceeds max_prompt_tokens ({self._config.max_prompt_tokens})",
