@@ -102,7 +102,9 @@ class SpeculativeState:
         prompt_ids: The original prompt token IDs.
         total_rounds: Number of verify rounds completed.
         total_accepted: Total draft tokens accepted across all rounds.
-        total_drafted: Total draft tokens generated across all rounds.
+        total_path_depth: Sum of longest-path depths across all rounds
+            (denominator for acceptance rate).
+        total_tree_nodes: Total draft tree nodes generated (for diagnostics).
         speculation_hits: Number of times N+1 speculation was correct.
         speculation_misses: Number of times N+1 was discarded.
         is_finished: Whether generation has reached a stop condition.
@@ -112,7 +114,8 @@ class SpeculativeState:
     prompt_ids: list[int] = field(default_factory=list)
     total_rounds: int = 0
     total_accepted: int = 0
-    total_drafted: int = 0
+    total_path_depth: int = 0
+    total_tree_nodes: int = 0
     speculation_hits: int = 0
     speculation_misses: int = 0
     is_finished: bool = False
@@ -484,7 +487,10 @@ async def run_speculative_loop_async(
         # Step B: Process verification result
         # --------------------------------------------------------------
         state.total_rounds += 1
-        state.total_drafted += len(current_draft.token_ids)
+        state.total_tree_nodes += len(current_draft.token_ids)
+        # Use the longest-path depth (not total tree nodes) for acceptance rate
+        path_depth = len(assumed_path)
+        state.total_path_depth += path_depth
         state.total_accepted += verify_result.accepted_length
 
         # Append accepted tokens and bonus token to output
@@ -507,10 +513,12 @@ async def run_speculative_loop_async(
         # Context for next round is only verified output (never speculative draft).
         current_context = list(prompt_ids) + state.generated_tokens
 
-        logger.debug(
-            "Round %d: accepted %d/%d, bonus=%d, total_output=%d",
+        logger.info(
+            "Round %d: accepted %d/%d (path_depth=%d, tree_nodes=%d), bonus=%d, total_output=%d",
             round_idx,
             verify_result.accepted_length,
+            path_depth,
+            path_depth,
             len(current_draft.token_ids),
             verify_result.bonus_token,
             len(state.generated_tokens),
@@ -522,29 +530,50 @@ async def run_speculative_loop_async(
         # --------------------------------------------------------------
         # Step C: Check if our speculation was correct
         # --------------------------------------------------------------
-        # Speculation is valid only if the full output of round N
-        # (accepted tokens + bonus/correction) exactly equals the assumed
-        # path — meaning the actual new context == speculative_context.
-        # A prefix-only check is always True for a linear chain (since
-        # accepted tokens are always a prefix of the assumed path by
-        # construction), which would cause us to reuse a stale draft
-        # computed for the wrong context position.
-        full_actual = list(verify_result.accepted_tokens)
-        if verify_result.bonus_token and verify_result.bonus_token != 0:
-            full_actual.append(verify_result.bonus_token)
-        speculation_correct = full_actual == list(speculative_assumption)
+        # The speculative draft N+1 was computed from context:
+        #   speculative_context = current_context + assumed_path
+        # Its first root token predicts position len(speculative_context).
+        #
+        # After verification the actual context becomes:
+        #   current_context + accepted_tokens + bonus_token
+        # The bonus token occupies the SAME position that the speculative
+        # draft's first root predicts.
+        #
+        # For the speculative draft to be valid, BOTH must hold:
+        #   1. accepted_tokens == assumed_path  (prefix is correct)
+        #   2. bonus_token == speculative_draft.root  (continuation matches)
+        # If (1) holds but (2) doesn't, the draft tree was generated from
+        # a context that diverges at the very first position — the target
+        # would reject everything, wasting a verify call.
+        actual_accepted = list(verify_result.accepted_tokens)
+        path_matches = actual_accepted == list(speculative_assumption)
+
+        bonus_matches = False
+        if path_matches and speculative_draft is not None and speculative_draft.token_ids:
+            # Find the first root of the speculative draft tree
+            first_root_idx = next(
+                (i for i, p in enumerate(speculative_draft.topology_map) if p == -1),
+                None,
+            )
+            if first_root_idx is not None:
+                bonus_matches = (
+                    verify_result.bonus_token == speculative_draft.token_ids[first_root_idx]
+                )
+
+        speculation_correct = path_matches and bonus_matches
 
         if speculation_correct:
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
             state.speculation_hits += 1
             current_draft = speculative_draft
-            logger.debug("Speculation HIT at round %d — reusing draft N+1", round_idx)
+            logger.info("Speculation HIT at round %d — reusing draft N+1", round_idx)
         else:
             # ❌ Speculation miss.  The speculative draft was computed
             # from an incorrect context.  Discard it and re-draft.
             state.speculation_misses += 1
-            logger.debug(
-                "Speculation MISS at round %d — discarding draft N+1 (accepted %d/%d assumed)",
+            logger.info(
+                "Speculation MISS at round %d — discarding draft N+1 "
+                "(accepted %d/%d assumed tokens)",
                 round_idx,
                 len(actual_accepted),
                 len(speculative_assumption),
@@ -572,7 +601,11 @@ async def run_speculative_loop_async(
 
     total_spec = state.speculation_hits + state.speculation_misses
     spec_hit_rate = state.speculation_hits / total_spec if total_spec > 0 else 0.0
-    acceptance_rate = state.total_accepted / state.total_drafted if state.total_drafted > 0 else 0.0
+    acceptance_rate = (
+        state.total_accepted / state.total_path_depth
+        if state.total_path_depth > 0
+        else 0.0
+    )
 
     result = PipelineResult(
         output_tokens=state.generated_tokens,

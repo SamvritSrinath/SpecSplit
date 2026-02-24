@@ -15,11 +15,12 @@ from __future__ import annotations
 import argparse
 import asyncio
 import logging
+import os
 from typing import Any
 
 import grpc
 
-from specsplit.core.config import OrchestratorConfig
+from specsplit.core.config import OrchestratorConfig, load_config_file
 from specsplit.core.telemetry import TelemetryLogger
 from specsplit.proto import spec_decoding_pb2_grpc
 from specsplit.workers.orchestrator.pipeline import (
@@ -192,6 +193,18 @@ def main() -> None:
         action="store_true",
         help="Enable target KV cache (dynamic caching). Default is naive/stateless per round for testing.",
     )
+    parser.add_argument(
+        "--max-output-tokens",
+        type=int,
+        default=None,
+        help="Maximum output tokens to generate (overrides config, default 1024).",
+    )
+    parser.add_argument(
+        "--config",
+        type=str,
+        default=None,
+        help="Path to a YAML or JSON config file. CLI args and env vars override file values.",
+    )
     args = parser.parse_args()
 
     logging.basicConfig(
@@ -199,19 +212,62 @@ def main() -> None:
         format="%(asctime)s | %(name)-30s | %(levelname)-7s | %(message)s",
     )
 
-    config_kw: dict = {"use_target_kv_cache": args.use_target_cache}
+    # Load config file if provided (lowest priority after env vars)
+    file_cfg: dict = {}
+    if args.config:
+        all_sections = load_config_file(args.config)
+        file_cfg = all_sections.get("orchestrator", {})
+
+    # CLI args override file config; env vars override both (pydantic-settings)
+    config_kw: dict = {**file_cfg, "use_target_kv_cache": args.use_target_cache}
     if args.max_rounds is not None:
         config_kw["max_rounds"] = args.max_rounds
+    if args.max_output_tokens is not None:
+        config_kw["max_output_tokens"] = args.max_output_tokens
     config = OrchestratorConfig(**config_kw)
-    model_name = args.model_name if args.model_name is not None else config.tokenizer_model
+
+    # Model name priority: --model-name > config file > OrchestratorConfig.tokenizer_model
+    if args.model_name is not None:
+        model_name = args.model_name
+    elif file_cfg.get("tokenizer_model"):
+        model_name = file_cfg["tokenizer_model"]
+    else:
+        model_name = config.tokenizer_model
+
+    # Warn if orchestrator tokenizer differs from worker model env vars
+    draft_model_env = os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
+    target_model_env = os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
+    if draft_model_env and draft_model_env != model_name:
+        logger.warning(
+            "Tokenizer mismatch: orchestrator uses '%s' but SPECSPLIT_DRAFT_MODEL_NAME='%s'. "
+            "Speculative decoding requires identical vocabularies.",
+            model_name,
+            draft_model_env,
+        )
+    if target_model_env and target_model_env != model_name:
+        logger.warning(
+            "Tokenizer mismatch: orchestrator uses '%s' but SPECSPLIT_TARGET_MODEL_NAME='%s'. "
+            "Speculative decoding requires identical vocabularies.",
+            model_name,
+            target_model_env,
+        )
+
     orch = Orchestrator(config=config, model_name=model_name)
     orch.connect()
-    result = orch.run(args.prompt)
+    output_text, result = orch.run_with_result(args.prompt)
 
     print(f"\n{'=' * 60}")
     print("Generated Output:")
     print(f"{'=' * 60}")
-    print(result)
+    print(output_text)
+    print(f"\n{'=' * 60}")
+    print("Pipeline Metrics:")
+    print(f"{'=' * 60}")
+    print(f"  Tokens generated:     {len(result.output_tokens)}")
+    print(f"  Rounds:               {result.total_rounds}")
+    print(f"  Acceptance rate:      {result.acceptance_rate * 100:.1f}%")
+    print(f"  Speculation hit rate: {result.speculation_hit_rate * 100:.1f}%")
+    print(f"  Wall time:            {result.wall_time_ms:.1f} ms")
 
     if args.telemetry_output:
         orch.export_telemetry(args.telemetry_output)

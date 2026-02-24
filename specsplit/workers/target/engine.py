@@ -508,8 +508,11 @@ class TargetEngine:
                     else:
                         tree_logits[i] = all_logits[0, 0, :]
                 else:
-                    # Child at node i: predicted by logits at position (base + i - 1)
-                    tree_logits[i] = all_logits[0, base + i - 1, :]
+                    # Child at node i: predicted by logits at parent's position.
+                    # For linear chains parent == i-1, but for branching trees
+                    # siblings share the same parent, so we look up the topology.
+                    parent = topology_map[i]
+                    tree_logits[i] = all_logits[0, base + parent, :]
 
             draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
 

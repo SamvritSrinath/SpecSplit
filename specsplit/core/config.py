@@ -4,18 +4,46 @@ All settings can be overridden via environment variables with the ``SPECSPLIT_``
 prefix. For example, ``SPECSPLIT_DRAFT_MODEL_NAME=gpt2`` overrides the default
 draft model name.
 
+Settings can also be loaded from a YAML or JSON config file using
+:func:`load_config_file`. Priority (highest → lowest):
+    1. Constructor kwargs / CLI arguments
+    2. Environment variables (``SPECSPLIT_*`` prefix)
+    3. Config file values
+    4. Field defaults
+
+Example YAML config file::
+
+    orchestrator:
+      draft_address: "localhost:50051"
+      target_address: "localhost:50052"
+      max_rounds: 50
+      max_output_tokens: 1024
+      tokenizer_model: "Qwen/Qwen2.5-7B-Instruct"
+    draft:
+      model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+      max_draft_tokens: 5
+    target:
+      model_name: "Qwen/Qwen2.5-7B-Instruct"
+
 Usage::
 
-    from specsplit.core.config import DraftWorkerConfig
+    from specsplit.core.config import OrchestratorConfig, load_config_file
 
-    cfg = DraftWorkerConfig()          # reads from env
-    print(cfg.model_name, cfg.device)
+    file_cfg = load_config_file("config.yaml")
+    cfg = OrchestratorConfig(**file_cfg.get("orchestrator", {}))
 """
 
 from __future__ import annotations
 
+import json
+import logging
+from pathlib import Path
+from typing import Any
+
 from pydantic import Field
 from pydantic_settings import BaseSettings
+
+logger = logging.getLogger(__name__)
 
 
 class DraftWorkerConfig(BaseSettings):
@@ -124,7 +152,7 @@ class OrchestratorConfig(BaseSettings):
         description="Per-RPC timeout in seconds.",
     )
     max_output_tokens: int = Field(
-        default=256,
+        default=1024,
         ge=1,
         description="Maximum total tokens to generate per prompt.",
     )
@@ -147,3 +175,62 @@ class OrchestratorConfig(BaseSettings):
     )
 
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}
+
+
+# ============================================================================
+# Config File Loader
+# ============================================================================
+
+
+def load_config_file(path: str | Path) -> dict[str, Any]:
+    """Load configuration from a YAML or JSON file.
+
+    The file should contain top-level keys matching the service names:
+    ``orchestrator``, ``draft``, and/or ``target``.  Each key maps to a
+    dict of field names → values.
+
+    Args:
+        path: Path to the config file (``.yaml``, ``.yml``, or ``.json``).
+
+    Returns:
+        A dict with keys ``"orchestrator"``, ``"draft"``, ``"target"``
+        (any or all may be absent if not specified in the file).
+
+    Raises:
+        FileNotFoundError: If the file does not exist.
+        ValueError: If the file format is unsupported.
+
+    Example::
+
+        cfg = load_config_file("specsplit.yaml")
+        orch = OrchestratorConfig(**cfg.get("orchestrator", {}))
+        draft = DraftWorkerConfig(**cfg.get("draft", {}))
+    """
+    filepath = Path(path)
+    if not filepath.exists():
+        raise FileNotFoundError(f"Config file not found: {filepath}")
+
+    suffix = filepath.suffix.lower()
+    text = filepath.read_text(encoding="utf-8")
+
+    if suffix in (".yaml", ".yml"):
+        try:
+            import yaml
+        except ImportError as exc:
+            raise ImportError(
+                "PyYAML is required to load YAML config files. "
+                "Install with: pip install pyyaml"
+            ) from exc
+        data = yaml.safe_load(text) or {}
+    elif suffix == ".json":
+        data = json.loads(text)
+    else:
+        raise ValueError(
+            f"Unsupported config file format '{suffix}'. Use .yaml, .yml, or .json."
+        )
+
+    if not isinstance(data, dict):
+        raise ValueError(f"Config file must contain a top-level mapping, got {type(data).__name__}")
+
+    logger.info("Loaded config from %s (sections: %s)", filepath, list(data.keys()))
+    return data
