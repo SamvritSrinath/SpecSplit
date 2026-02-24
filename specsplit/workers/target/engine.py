@@ -20,6 +20,7 @@ Architecture Notes:
 from __future__ import annotations
 
 import logging
+import threading
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any
@@ -87,6 +88,20 @@ class KVCacheState:
 # =============================================================================
 
 
+def _cache_seq_len(past_key_values: Any) -> int:
+    """Return the cached sequence length from HuggingFace past_key_values.
+
+    Supports both the legacy tuple format (tuple of (key, value) per layer)
+    and the Cache API (e.g. DynamicCache) used by newer models (Qwen2, etc.).
+    """
+    if past_key_values is None:
+        return 0
+    if hasattr(past_key_values, "get_seq_length"):
+        return past_key_values.get_seq_length()
+    # Legacy tuple format: (layer0_key, layer0_value), (layer1_key, layer1_value), ...
+    return int(past_key_values[0][0].shape[2])
+
+
 def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:    
     """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
 
@@ -148,8 +163,11 @@ class TargetEngine:
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._is_loaded = False
 
-        # Session → KV cache mapping (LRU ordered)
+        # Session → KV cache mapping (LRU ordered).
+        # Concurrency: each session_id has a single lock; concurrent requests
+        # for the same session are serialized to avoid cache/next_root_logit races.
         self._session_caches: OrderedDict[str, KVCacheState] = OrderedDict()
+        self._session_locks: dict[str, threading.Lock] = {}
 
         logger.info(
             "TargetEngine initialized (model=%s, device=%s, max_sessions=%d)",
@@ -213,12 +231,14 @@ class TargetEngine:
         # Enforce max-sessions limit with LRU eviction
         if len(self._session_caches) >= self.config.max_sessions:
             evict_id, _ = self._session_caches.popitem(last=False)  # Remove oldest (first)
+            self._session_locks.pop(evict_id, None)
             logger.warning(
                 "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
             )
 
         cache = KVCacheState()
         self._session_caches[session_id] = cache
+        self._session_locks[session_id] = threading.Lock()
         logger.debug("Session cache created: %s", session_id)
         return cache, False
 
@@ -232,6 +252,7 @@ class TargetEngine:
             True if the session existed and was removed, False otherwise.
         """
         cache = self._session_caches.pop(session_id, None)
+        self._session_locks.pop(session_id, None)
         if cache is not None:
             # Explicitly delete tensors to free GPU memory
             cache.past_key_values = None
@@ -288,18 +309,22 @@ class TargetEngine:
             logger.debug("Rollback no-op: accepted_depth == seq_len (%d)", accepted_depth)
             return
 
-        # Crop each layer's (key, value) tensors along the seq_len dimension (dim=2)
-        # HuggingFace past_key_values shape: (key, value) each (batch, heads, seq, head_dim)
-        rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
-        for layer_key, layer_value in cache.past_key_values:
-            rolled_back.append(
-                (
-                    layer_key[:, :, :accepted_depth, :].contiguous(),
-                    layer_value[:, :, :accepted_depth, :].contiguous(),
+        # Support both Cache API (DynamicCache, etc.) and legacy tuple format
+        if hasattr(cache.past_key_values, "crop"):
+            cache.past_key_values.crop(accepted_depth)
+        else:
+            # Legacy tuple format: crop each layer's (key, value) along seq dimension (dim=2)
+            # HuggingFace past_key_values shape: (key, value) each (batch, heads, seq, head_dim)
+            rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
+            for layer_key, layer_value in cache.past_key_values:
+                rolled_back.append(
+                    (
+                        layer_key[:, :, :accepted_depth, :].contiguous(),
+                        layer_value[:, :, :accepted_depth, :].contiguous(),
+                    )
                 )
-            )
+            cache.past_key_values = tuple(rolled_back)
 
-        cache.past_key_values = tuple(rolled_back)
         old_len = cache.seq_len
         cache.seq_len = accepted_depth
 
@@ -355,175 +380,181 @@ class TargetEngine:
         # --- Session cache lookup ---
         cache_hit = False
         cache_state: KVCacheState | None = None
-
+        session_lock: threading.Lock | None = None
         if session_id is not None:
             cache_state, cache_hit = self.get_or_create_session(session_id)
+            session_lock = self._session_locks[session_id]
+            session_lock.acquire()
+        try:
+            # --- Handle empty tree (no draft tokens) ---
+            if not draft_tree:
+                sw.stop()
+                return VerificationResult(
+                    accepted_token_ids=[],
+                    correction_token_id=None,
+                    num_accepted=0,
+                    cache_hit=cache_hit,
+                )
 
-        # --- Handle empty tree (no draft tokens) ---
-        if not draft_tree:
+            # --- Step 1: Flatten tree → (token_ids, topology_map) ---
+            flat_token_ids, topology_map, flat_log_probs = _flatten_tree(draft_tree)
+            num_tree_nodes = len(flat_token_ids)
+
+            # --- Step 2: Determine what to feed the model ---
+            past_kv = cache_state.past_key_values if cache_state else None
+            prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
+
+            if cache_hit and prefix_length > 0:
+                # Cache hit: only feed the new draft tokens.
+                # We explicitly DO NOT append prompt_ids[-1] to avoid duplicate
+                # tokens corrupting the target KV Cache.
+                input_token_ids = flat_token_ids
+            else:
+                # No cache (or first call): feed prompt + draft tokens
+                input_token_ids = prompt_ids + flat_token_ids
+                prefix_length = len(prompt_ids)
+                past_kv = None  # Don't use stale cache
+
+            input_ids = torch.tensor([input_token_ids], dtype=torch.long, device=self.device)
+            # Shape: [1, input_len]
+
+            # --- Step 3: Build tree-attention mask ---
+            attn_mask_bool, position_ids = build_tree_attention(
+                topology_map=topology_map,
+                prefix_length=prefix_length,
+                device=self.device,
+            )
+            # attn_mask_bool shape: [1, 1, total_len, total_len]
+            # position_ids shape: [1, total_len]
+
+            # When using KV cache, we only need the query rows for the
+            # new tokens (the prefix is already cached)
+            if past_kv is not None:
+                # Slice to only the new input tokens' rows
+                new_len = len(input_token_ids)
+                attn_mask_bool = attn_mask_bool[:, :, -new_len:, :]
+                position_ids = position_ids[:, -new_len:]
+
+            # Convert bool mask → float mask (0.0 / -inf) for HF compatibility
+            attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
+
+            # --- Step 4: Forward pass ---
+            with torch.no_grad():
+                outputs = self._model(
+                    input_ids=input_ids,
+                    attention_mask=attn_mask_float,
+                    position_ids=position_ids,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                )
+
+            # --- Step 5: Update session cache ---
+            new_past_kv = outputs.past_key_values
+            new_seq_len = _cache_seq_len(new_past_kv)
+
+            if cache_state is not None:
+                cache_state.past_key_values = new_past_kv
+                cache_state.seq_len = new_seq_len
+
+            # --- Step 6: Extract tree-position logits and verify ---
+            # all_logits[j] predicts the token at position j+1 (causal LM semantics).
+            # Tree nodes are in BFS order in the input; node i is at input position
+            # (base + i) where base=0 on cache hit (tree only) else prefix_length.
+            all_logits = outputs.logits  # [1, input_len, vocab_size]
+
+            tree_logits = torch.zeros(
+                num_tree_nodes, all_logits.shape[-1],
+                dtype=all_logits.dtype,
+                device=self.device,
+            )
+            # Shape: [num_tree_nodes, vocab_size]
+
+            base = 0 if cache_hit else prefix_length
+            for i in range(num_tree_nodes):
+                if i == 0:
+                    # Root: logits that predict the first tree token
+                    if cache_hit and prefix_length > 0 and cache_state.next_root_logit is not None:
+                        tree_logits[i] = cache_state.next_root_logit
+                    elif prefix_length > 0:
+                        tree_logits[i] = all_logits[0, prefix_length - 1, :]
+                    else:
+                        tree_logits[i] = all_logits[0, 0, :]
+                else:
+                    # Child at node i: predicted by logits at position (base + i - 1)
+                    tree_logits[i] = all_logits[0, base + i - 1, :]
+
+            draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
+
+            # --- Task 3.3: Speculative Acceptance Routing ---
+            if temperature > 0.0:
+                # Convert target logits to probabilities
+                target_probs = torch.softmax(tree_logits / temperature, dim=-1)
+                # Convert draft log_probs back to probabilities
+                draft_probs = torch.exp(torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device))
+                result_data = verify_stochastic_tree(
+                    draft_tokens=draft_tokens_tensor,
+                    draft_probs=draft_probs,
+                    target_probs=target_probs,
+                    topology_map=topology_map,
+                )
+            else:
+                # Fallback to pure greedy verification
+                result_data = verify_greedy_tree(
+                    draft_tokens=draft_tokens_tensor,
+                    target_logits=tree_logits,
+                    topology_map=topology_map,
+                )
+
+            # --- Step 7: Build VerificationResult ---
+            accepted_ids = result_data.accepted_tokens
+            correction = result_data.bonus_token if result_data.bonus_token >= 0 else None
+            num_accepted = result_data.num_accepted
+            leaf_idx = result_data.accepted_leaf_index
+
+            # When the full path to a leaf was accepted, verify_greedy_tree returns
+            # bonus = argmax(tree_logits[leaf]) = the leaf token (duplicate). The
+            # correct bonus is the next token after the leaf: argmax at position base+leaf_idx.
+            if (
+                num_accepted > 0
+                and leaf_idx >= 0
+                and result_data.bonus_token == accepted_ids[-1]
+            ):
+                correction = all_logits[0, base + leaf_idx, :].argmax(dim=-1).item()
+
+            # --- Step 8: Rollback cache to accepted prefix and update logic states ---
+            if session_id is not None and cache_state is not None:
+                accepted_total = prefix_length + num_accepted
+                if accepted_total <= cache_state.seq_len:
+                    self.rollback_cache(session_id, accepted_total)
+
+                if correction is not None and correction >= 0:
+                    correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
+                    with torch.no_grad():
+                        correction_output = self._model(
+                            input_ids=correction_input,
+                            past_key_values=cache_state.past_key_values,
+                            use_cache=True,
+                        )
+                    cache_state.past_key_values = correction_output.past_key_values
+                    cache_state.seq_len = _cache_seq_len(correction_output.past_key_values)
+                    cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
+                else:
+                    if num_accepted > 0:
+                        if cache_hit:
+                            cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
+                        else:
+                            cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
+
             sw.stop()
             return VerificationResult(
-                accepted_token_ids=[],
-                correction_token_id=None,
-                num_accepted=0,
+                accepted_token_ids=accepted_ids,
+                correction_token_id=correction,
+                num_accepted=num_accepted,
                 cache_hit=cache_hit,
             )
-
-        # --- Step 1: Flatten tree → (token_ids, topology_map) ---
-        flat_token_ids, topology_map, flat_log_probs = _flatten_tree(draft_tree)       
-        num_tree_nodes = len(flat_token_ids)
-
-        # --- Step 2: Determine what to feed the model ---
-        past_kv = cache_state.past_key_values if cache_state else None
-        prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
-
-        if cache_hit and prefix_length > 0:
-            # Cache hit: only feed the new draft tokens. 
-            # We explicitly DO NOT append prompt_ids[-1] to avoid duplicate
-            # tokens corrupting the target KV Cache.
-            input_token_ids = flat_token_ids
-        else:
-            # No cache (or first call): feed prompt + draft tokens
-            input_token_ids = prompt_ids + flat_token_ids
-            prefix_length = len(prompt_ids)
-            past_kv = None  # Don't use stale cache
-
-        input_ids = torch.tensor([input_token_ids], dtype=torch.long, device=self.device)
-        # Shape: [1, input_len]
-
-        # --- Step 3: Build tree-attention mask ---
-        attn_mask_bool, position_ids = build_tree_attention(
-            topology_map=topology_map,
-            prefix_length=prefix_length,
-            device=self.device,
-        )
-        # attn_mask_bool shape: [1, 1, total_len, total_len]
-        # position_ids shape: [1, total_len]
-
-        # When using KV cache, we only need the query rows for the
-        # new tokens (the prefix is already cached)
-        if past_kv is not None:
-            # Slice to only the new input tokens' rows
-            new_len = len(input_token_ids)
-            attn_mask_bool = attn_mask_bool[:, :, -new_len:, :]
-            position_ids = position_ids[:, -new_len:]
-
-        # Convert bool mask → float mask (0.0 / -inf) for HF compatibility
-        attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
-
-        # --- Step 4: Forward pass ---
-        with torch.no_grad():
-            outputs = self._model(
-                input_ids=input_ids,
-                attention_mask=attn_mask_float,
-                position_ids=position_ids,
-                past_key_values=past_kv,
-                use_cache=True,
-            )
-
-        # --- Step 5: Update session cache ---
-        new_past_kv = outputs.past_key_values
-        new_seq_len = new_past_kv[0][0].shape[2] if new_past_kv else 0
-
-        if cache_state is not None:
-            cache_state.past_key_values = new_past_kv
-            cache_state.seq_len = new_seq_len
-
-        # --- Step 6: Extract tree-position logits and verify ---
-        all_logits = outputs.logits  # [1, input_len, vocab_size]
-        
-        # Build verification logits by gathering from parent positions
-        tree_logits = torch.zeros(
-            num_tree_nodes, all_logits.shape[-1], 
-            dtype=all_logits.dtype, 
-            device=self.device
-        )
-        # Shape: [num_tree_nodes, vocab_size]
-        
-        for i in range(num_tree_nodes):
-            parent_idx = topology_map[i]
-            if parent_idx == -1:
-                # Root node: Verification requires logits predicting the token itself.
-                if cache_hit and prefix_length > 0 and cache_state.next_root_logit is not None:
-                    # Leverage the saved `next_root_logit` generated during the previous round.
-                    tree_logits[i] = cache_state.next_root_logit
-                elif prefix_length > 0:
-                    # No cache: all_logits contains prefix + tree, use last prefix position
-                    tree_logits[i] = all_logits[0, prefix_length - 1, :]
-                else:
-                    # No prefix at all (unusual case)
-                    tree_logits[i] = all_logits[0, 0, :]
-            else:
-                # Child node: use logits from parent's position
-                if cache_hit:
-                    # With cache: flat_token_ids start at index 0.
-                    tree_logits[i] = all_logits[0, parent_idx, :]
-                else:
-                    # Without cache: all_logits contains prefix + tree
-                    tree_logits[i] = all_logits[0, prefix_length + parent_idx, :]
-
-        draft_tokens_tensor = torch.tensor(flat_token_ids, dtype=torch.long, device=self.device)
-        
-        # --- Task 3.3: Speculative Acceptance Routing ---
-        if temperature > 0.0:
-            # Convert target logits to probabilities
-            target_probs = torch.softmax(tree_logits / temperature, dim=-1)
-            # Convert draft log_probs back to probabilities
-            draft_probs = torch.exp(torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device))
-            result_data = verify_stochastic_tree(
-                draft_tokens=draft_tokens_tensor,
-                draft_probs=draft_probs,
-                target_probs=target_probs,
-                topology_map=topology_map,
-            )
-        else:
-            # Fallback to pure greedy verification
-            result_data = verify_greedy_tree(
-                draft_tokens=draft_tokens_tensor,
-                target_logits=tree_logits,
-                topology_map=topology_map,
-            )
-
-        # --- Step 7: Build VerificationResult ---
-        accepted_ids = result_data.accepted_tokens
-        correction = result_data.bonus_token if result_data.bonus_token >= 0 else None
-        num_accepted = result_data.num_accepted
-        leaf_idx = result_data.accepted_leaf_index
-
-        # --- Step 8: Rollback cache to accepted prefix and update logic states ---
-        if session_id is not None and cache_state is not None:
-            accepted_total = prefix_length + num_accepted
-            if accepted_total <= cache_state.seq_len:
-                self.rollback_cache(session_id, accepted_total)
-            
-            if correction is not None and correction >= 0:
-                correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
-                with torch.no_grad():
-                    correction_output = self._model(
-                        input_ids=correction_input,
-                        past_key_values=cache_state.past_key_values,
-                        use_cache=True,
-                    )
-                cache_state.past_key_values = correction_output.past_key_values
-                cache_state.seq_len = (
-                    correction_output.past_key_values[0][0].shape[2]
-                    if correction_output.past_key_values else 0
-                )
-                cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
-            else:
-                if num_accepted > 0:
-                    if cache_hit:
-                        cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
-                    else:
-                        cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
-
-        sw.stop()
-        return VerificationResult(
-            accepted_token_ids=accepted_ids,
-            correction_token_id=correction,
-            num_accepted=num_accepted,
-            cache_hit=cache_hit,
-        )
+        finally:
+            if session_lock is not None:
+                session_lock.release()
     # --------------------------------------------------------------------- #
     # Properties
     # --------------------------------------------------------------------- #

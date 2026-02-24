@@ -504,6 +504,7 @@ async def run_speculative_loop_async(
             state.is_finished = True
 
         state.generated_tokens.extend(new_tokens)
+        # Context for next round is only verified output (never speculative draft).
         current_context = list(prompt_ids) + state.generated_tokens
 
         logger.debug(

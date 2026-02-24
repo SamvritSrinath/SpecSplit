@@ -506,3 +506,84 @@ class TestVerifyWithMockedModel:
             session_id="sess-A",
         )
         assert result.cache_hit is True
+
+    @patch("specsplit.workers.target.engine.verify_greedy_tree")
+    @patch("specsplit.workers.target.engine.verify_stochastic_tree")
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_verify_greedy_path_when_temperature_zero(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_verify_stochastic: MagicMock,
+        mock_verify_greedy: MagicMock,
+    ) -> None:
+        """When temperature=0, verify_greedy_tree is used (stochastic path not used)."""
+        draft_ids = [10, 20]
+        prompt_ids = [1, 2]
+        accept_tokens = [0, 10, 20, 0]
+        mock_verify_greedy.return_value = MagicMock(
+            accepted_tokens=draft_ids,
+            bonus_token=99,
+            num_accepted=2,
+            accepted_leaf_index=1,
+        )
+        mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = TargetWorkerConfig(model_name="gpt2", device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        tree = self._make_tree(draft_ids)
+        engine.verify_draft_tree(
+            prompt_ids=prompt_ids,
+            draft_tree=tree,
+            session_id=None,
+            temperature=0.0,
+        )
+
+        mock_verify_greedy.assert_called_once()
+        mock_verify_stochastic.assert_not_called()
+
+    @patch("specsplit.workers.target.engine.verify_greedy_tree")
+    @patch("specsplit.workers.target.engine.verify_stochastic_tree")
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_verify_stochastic_path_when_temperature_positive(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_verify_stochastic: MagicMock,
+        mock_verify_greedy: MagicMock,
+    ) -> None:
+        """When temperature > 0, verify_stochastic_tree is used (greedy path not used)."""
+        draft_ids = [10, 20]
+        prompt_ids = [1, 2]
+        accept_tokens = [0, 10, 20, 0]
+        mock_verify_stochastic.return_value = MagicMock(
+            accepted_tokens=draft_ids,
+            bonus_token=99,
+            num_accepted=2,
+            accepted_leaf_index=1,
+        )
+        mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = TargetWorkerConfig(model_name="gpt2", device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        tree = self._make_tree(draft_ids)
+        result = engine.verify_draft_tree(
+            prompt_ids=prompt_ids,
+            draft_tree=tree,
+            session_id=None,
+            temperature=0.5,
+        )
+
+        mock_verify_stochastic.assert_called_once()
+        mock_verify_greedy.assert_not_called()
+        assert result.num_accepted == 2
+        assert result.accepted_token_ids == draft_ids
+        assert result.correction_token_id == 99

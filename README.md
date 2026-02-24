@@ -176,6 +176,11 @@ See [docs/project_guide.md](docs/project_guide.md) for more setup options.
 | `make format`    | Auto-format code with ruff                          |
 | `make clean`     | Remove caches, build artifacts, and generated stubs |
 
+### Running tests
+
+- **Unit tests** (fast, no model download):  
+  `make test` or `pytest tests/unit/ -v`
+
 ---
 
 ## Running the System
