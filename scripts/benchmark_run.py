@@ -39,7 +39,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from specsplit.core.config import OrchestratorConfig
-from specsplit.core.telemetry import Stopwatch, TelemetryLogger
+from specsplit.core.telemetry import TelemetryLogger
 from specsplit.workers.orchestrator.client import Orchestrator
 
 logger = logging.getLogger(__name__)
@@ -103,6 +103,35 @@ class RequestMetrics:
 # =========================================================================
 
 
+def _ttft_from_telemetry(telemetry: list[dict]) -> float:
+    """Compute Time-to-First-Token from pipeline telemetry spans.
+
+    TTFT is the time from request start until the first batch of tokens
+    is available, which spans the initial draft generation plus the first
+    overlapped verify/draft round.
+
+    Args:
+        telemetry: List of span dicts from ``PipelineResult.telemetry``.
+
+    Returns:
+        TTFT in milliseconds, or 0.0 if the required spans are absent.
+    """
+    initial_draft_ms = next(
+        (s["wall_time_ms"] for s in telemetry if s["operation"] == "initial_draft"),
+        0.0,
+    )
+    first_round_ms = next(
+        (
+            s["wall_time_ms"]
+            for s in telemetry
+            if s["operation"] == "overlapped_round"
+            and s["metadata"].get("round_idx") == 0
+        ),
+        0.0,
+    )
+    return initial_draft_ms + first_round_ms
+
+
 class BenchmarkOrchestrator:
     """Wraps the real ``Orchestrator`` and instruments every round.
 
@@ -126,104 +155,46 @@ class BenchmarkOrchestrator:
         """Establish gRPC connections."""
         self._orch.connect()
 
-    def run_and_measure(self, prompt: str, prompt_token_count: int) -> RequestMetrics:
+    def run_and_measure(self, prompt: str) -> RequestMetrics:
         """Run a single prompt through the pipeline and measure everything.
 
-        .. warning::
-            **Simulated Metrics:** This method currently generates simulated
-            per-round metrics (fixed 30/50/20 time splits, ``tokens_accepted=0``,
-            ``acceptance_rate=0.0``, and token counts estimated from output text)
-            because it calls the real ``Orchestrator.run()`` which doesn't yet
-            expose round-level instrumentation. The produced CSV numbers will be
-            misleading for actual benchmarks until the pipeline returns structured
-            ``PipelineResult`` objects with real telemetry.
-
-        The benchmark instruments the orchestrator's internal flow by timing
-        each draft→verify round independently.  Because the real pipeline
-        is still stubbed, this uses a **simulated timing model** that
-        records the call structure and produces realistic metric shapes.
+        Calls the real orchestrator pipeline and extracts per-request metrics
+        directly from the returned ``PipelineResult`` and its telemetry spans.
 
         Args:
             prompt: Input text prompt.
-            prompt_token_count: Pre-computed prompt token count.
 
         Returns:
-            A populated ``RequestMetrics`` instance.
-
-        .. todo::
-            Wire into the real orchestrator once the pipeline is un-stubbed.
-            Replace the simulated timers below with actual round timers.
+            A populated ``RequestMetrics`` instance with real measurements.
         """
         request_id = uuid.uuid4().hex[:12]
-        sw_total = Stopwatch()
-        sw_total.start()
-
-        round_metrics: list[dict] = []
-        first_token_time: float | None = None
-        total_net_idle = 0.0
-
-        # --------------- round loop (instrumented) ---------------
-        # TODO(real-pipeline): Replace with per-round instrumentation once
-        # the orchestrator exposes round-level hooks.  Currently the stub
-        # orchestrator.run() is called once and the script infers metrics
-        # from telemetry spans.
 
         with self._telemetry.span(
             "benchmark_request",
             request_id=request_id,
             gamma=self.gamma,
-            prompt_length=prompt_token_count,
         ):
-            sw_round = Stopwatch()
-            sw_round.start()
+            _, result = self._orch.run_with_result(prompt)
 
-            output = self._orch.run(prompt)
+        # Use the real tokenizer for prompt length if available
+        tokenizer = self._orch._ensure_tokenizer()
+        real_prompt_tokens = len(tokenizer.encode(prompt))
 
-            sw_round.stop()
-
-            # ---- Estimate per-round metrics from the span ----
-            # With the stubbed orchestrator we simulate the round structure.
-            # In production, each draft→verify round would be individually
-            # timed.  Here we assume one round for the stub.
-            simulated_round = {
-                "round": 1,
-                "draft_ms": sw_round.elapsed_ms * 0.3,  # ~30% draft
-                "verify_ms": sw_round.elapsed_ms * 0.5,  # ~50% verify
-                "network_idle_ms": sw_round.elapsed_ms * 0.2,  # ~20% network
-                "tokens_accepted": 0,
-                "tokens_drafted": self.gamma,
-                "acceptance_rate": 0.0,
-            }
-            round_metrics.append(simulated_round)
-            total_net_idle += simulated_round["network_idle_ms"]
-
-            # First token available at end of first round
-            if first_token_time is None:
-                first_token_time = sw_round.elapsed_ms
-
-        sw_total.stop()
-
-        # ---- Compute aggregate metrics ----
-        if round_metrics:
-            avg_acceptance = statistics.mean(r["acceptance_rate"] for r in round_metrics)
-        else:
-            avg_acceptance = 0.0
-
-        # For stub: estimate generated tokens from output length
-        estimated_gen_tokens = max(len(output.split()) * 2, 1)  # rough estimate
-        tpot = sw_total.elapsed_ms / max(estimated_gen_tokens, 1)
+        generated_tokens = len(result.output_tokens)
+        ttft_ms = _ttft_from_telemetry(result.telemetry)
+        tpot_ms = result.wall_time_ms / max(generated_tokens, 1)
 
         return RequestMetrics(
             request_id=request_id,
             gamma=self.gamma,
-            prompt_length=prompt_token_count,
-            generated_tokens=estimated_gen_tokens,
-            ttft_ms=round(first_token_time or 0.0, 3),
-            tpot_ms=round(tpot, 3),
-            average_acceptance_rate=round(avg_acceptance, 4),
-            total_network_idle_ms=round(total_net_idle, 3),
-            total_latency_ms=round(sw_total.elapsed_ms, 3),
-            num_rounds=len(round_metrics),
+            prompt_length=real_prompt_tokens,
+            generated_tokens=generated_tokens,
+            ttft_ms=round(ttft_ms, 3),
+            tpot_ms=round(tpot_ms, 3),
+            average_acceptance_rate=round(result.acceptance_rate, 4),
+            total_network_idle_ms=0.0,
+            total_latency_ms=round(result.wall_time_ms, 3),
+            num_rounds=result.total_rounds,
         )
 
 
@@ -272,15 +243,6 @@ def load_dataset(path: str) -> list[dict]:
 
     logger.info("Loaded %d prompts from %s", len(entries), path)
     return entries
-
-
-def estimate_token_count(text: str) -> int:
-    """Rough token count estimate (whitespace + punctuation heuristic).
-
-    Used when a real tokenizer is unavailable.  For accurate counts,
-    replace with ``len(tokenizer.encode(text))``.
-    """
-    return max(len(text.split()), 1)
 
 
 # =========================================================================
@@ -427,20 +389,18 @@ def main() -> None:
 
         for i, entry in enumerate(dataset):
             prompt = entry["prompt"]
-            prompt_tokens = estimate_token_count(prompt)
             req_id = entry.get("id", f"req-{i:04d}")
 
             logger.info(
-                "[gamma=%d] Prompt %d/%d (id=%s, ~%d toks): %r",
+                "[gamma=%d] Prompt %d/%d (id=%s): %r",
                 gamma,
                 i + 1,
                 len(dataset),
                 req_id,
-                prompt_tokens,
                 prompt[:60],
             )
 
-            metrics = bench_orch.run_and_measure(prompt, prompt_tokens)
+            metrics = bench_orch.run_and_measure(prompt)
             metrics.request_id = req_id
             all_metrics.append(metrics)
 
