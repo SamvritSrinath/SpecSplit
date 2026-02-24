@@ -88,6 +88,32 @@ class KVCacheState:
 # =============================================================================
 
 
+def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Tensor], ...] | None:
+    """Convert HuggingFace past_key_values to legacy tuple format for subscript/iteration.
+
+    Handles legacy tuples (returned as-is), Cache API with to_legacy_cache (older
+    transformers), and Cache API with .layers (e.g. DynamicCache in newer transformers
+    that no longer provide to_legacy_cache).
+    """
+    if past_key_values is None:
+        return None
+    # Already legacy: tuple of (key, value) per layer
+    if isinstance(past_key_values, tuple) and len(past_key_values) > 0:
+        first = past_key_values[0]
+        if isinstance(first, (tuple, list)) and len(first) == 2:
+            return past_key_values  # type: ignore[return-value]
+    if hasattr(past_key_values, "to_legacy_cache"):
+        return past_key_values.to_legacy_cache()
+    # New Cache API (e.g. DynamicCache): build legacy from .layers
+    if hasattr(past_key_values, "layers") and isinstance(past_key_values.layers, (list, tuple)):
+        return tuple(
+            (layer.keys, layer.values)
+            for layer in past_key_values.layers
+            if getattr(layer, "is_initialized", True) and getattr(layer, "keys", None) is not None
+        )
+    return None
+
+
 def _cache_seq_len(past_key_values: Any) -> int:
     """Return the cached sequence length from HuggingFace past_key_values.
 
@@ -97,12 +123,11 @@ def _cache_seq_len(past_key_values: Any) -> int:
     if past_key_values is None:
         return 0
     if hasattr(past_key_values, "get_seq_length"):
-        return past_key_values.get_seq_length()
-    # Convert DynamicCache (and similar) to legacy tuple so we can subscript safely
-    if hasattr(past_key_values, "to_legacy_cache"):
-        past_key_values = past_key_values.to_legacy_cache()
-    # Legacy tuple format: (layer0_key, layer0_value), (layer1_key, layer1_value), ...
-    return int(past_key_values[0][0].shape[2])
+        return int(past_key_values.get_seq_length())
+    legacy = _to_legacy_cache(past_key_values)
+    if legacy is None or len(legacy) == 0:
+        return 0
+    return int(legacy[0][0].shape[2])
 
 
 def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:
@@ -314,9 +339,11 @@ class TargetEngine:
 
         # Convert to legacy tuple if needed (DynamicCache, etc.), then crop in place
         rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
-        past_kv = cache.past_key_values
-        if hasattr(past_kv, "to_legacy_cache"):
-            past_kv = past_kv.to_legacy_cache()
+        past_kv = _to_legacy_cache(cache.past_key_values)
+        if past_kv is None:
+            cache.past_key_values = None
+            cache.seq_len = 0
+            return
         for layer_key, layer_value in past_kv:
             rolled_back.append(
                 (
@@ -450,10 +477,8 @@ class TargetEngine:
                 )
 
             # --- Step 5: Update session cache ---
-            new_past_kv = outputs.past_key_values
-            if hasattr(new_past_kv, "to_legacy_cache"):
-                new_past_kv = new_past_kv.to_legacy_cache()
-            new_seq_len = new_past_kv[0][0].shape[2] if new_past_kv else 0
+            new_past_kv = _to_legacy_cache(outputs.past_key_values)
+            new_seq_len = int(new_past_kv[0][0].shape[2]) if new_past_kv else 0
 
             if cache_state is not None:
                 cache_state.past_key_values = new_past_kv
@@ -538,12 +563,10 @@ class TargetEngine:
                             past_key_values=cache_state.past_key_values,
                             use_cache=True,
                         )
-                    corr_past_kv = correction_output.past_key_values
-                    if hasattr(corr_past_kv, "to_legacy_cache"):
-                        corr_past_kv = corr_past_kv.to_legacy_cache()
+                    corr_past_kv = _to_legacy_cache(correction_output.past_key_values)
                     cache_state.past_key_values = corr_past_kv
                     cache_state.seq_len = (
-                        corr_past_kv[0][0].shape[2] if corr_past_kv else 0
+                        int(corr_past_kv[0][0].shape[2]) if corr_past_kv else 0
                     )
                     cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
                 else:

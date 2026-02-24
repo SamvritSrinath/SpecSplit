@@ -110,6 +110,7 @@ class Orchestrator:
         prompt_ids: list[int] = tokenizer.encode(prompt)
         eos_token_id: int = tokenizer.eos_token_id or 2
 
+        session_id = "" if not self.config.use_target_kv_cache else "default"
         with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
             result: PipelineResult = asyncio.run(
                 run_speculative_loop_async(
@@ -117,6 +118,7 @@ class Orchestrator:
                     target_stub=self._target_stub,
                     prompt_ids=prompt_ids,
                     config=self.config,
+                    session_id=session_id,
                     eos_token_id=eos_token_id,
                 )
             )
@@ -176,14 +178,19 @@ def main() -> None:
     parser.add_argument(
         "--model-name",
         type=str,
-        default="gpt2",
-        help="HuggingFace model name for tokenizer (default: gpt2)",
+        default=None,
+        help="Tokenizer model; must match target/draft (e.g. Qwen2/Qwen2.5-7B-Instruct). Overrides SPECSPLIT_ORCH_TOKENIZER_MODEL.",
     )
     parser.add_argument(
         "--telemetry-output",
         type=str,
         default=None,
         help="Path to export telemetry JSON",
+    )
+    parser.add_argument(
+        "--use-target-cache",
+        action="store_true",
+        help="Enable target KV cache (dynamic caching). Default is naive/stateless per round for testing.",
     )
     args = parser.parse_args()
 
@@ -192,11 +199,12 @@ def main() -> None:
         format="%(asctime)s | %(name)-30s | %(levelname)-7s | %(message)s",
     )
 
-    config = OrchestratorConfig()
+    config_kw: dict = {"use_target_kv_cache": args.use_target_cache}
     if args.max_rounds is not None:
-        config = OrchestratorConfig(max_rounds=args.max_rounds)
-
-    orch = Orchestrator(config=config, model_name=args.model_name)
+        config_kw["max_rounds"] = args.max_rounds
+    config = OrchestratorConfig(**config_kw)
+    model_name = args.model_name if args.model_name is not None else config.tokenizer_model
+    orch = Orchestrator(config=config, model_name=model_name)
     orch.connect()
     result = orch.run(args.prompt)
 
