@@ -137,4 +137,9 @@ class OrchestratorConfig(BaseSettings):
     # Task 4.1: Synthetic Latency Rig (milliseconds)
     simulated_rtt_ms: float = Field(default=0.0, description="Injected network latency per RPC")
 
+    use_target_kv_cache: bool = Field(
+        default=False,
+        description="If False (naive mode), target verifies statelessly each round — no session KV cache, no flush. Use for testing that orchestrator/draft/target communication works.",
+    )
+
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}

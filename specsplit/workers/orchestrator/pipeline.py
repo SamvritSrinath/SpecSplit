@@ -543,8 +543,9 @@ async def run_speculative_loop_async(
                 len(speculative_assumption),
             )
 
-            # Send flush signal to Target Worker to clear its speculative cache
-            await _call_flush_draft_cache(target_stub, session_id)
+            # Send flush signal to Target Worker to clear its speculative cache (no-op when stateless)
+            if session_id:
+                await _call_flush_draft_cache(target_stub, session_id)
 
             # Re-draft from the CORRECTED context
             with telemetry.span("re_draft", round_idx=round_idx):
