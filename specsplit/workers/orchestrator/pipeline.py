@@ -173,7 +173,11 @@ def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
 
 
 def _get_longest_path(draft: DraftTree) -> list[int]:
-    """Extract the longest root-to-leaf path from a flattened tree."""
+    """Extract the longest root-to-leaf path from a flattened tree.
+
+    When multiple paths have the same maximum length, the first such path
+    encountered in DFS traversal order (stack-based) is returned.
+    """
     children: dict[int, list[int]] = {}
     for i, p in enumerate(draft.topology_map):
         children.setdefault(p, []).append(i)

@@ -49,9 +49,11 @@ ping-pong loop between workers.
    to score all candidate paths simultaneously.  If a `session_id` is provided,
    the existing KV cache for that session is reused and rolled back to the
    accepted prefix after verification.
-5. **Rejection sampling** determines the longest accepted prefix:
-   - If `p_target(x) ≥ p_draft(x)`: token accepted.
-   - Otherwise: accepted with probability `p_target(x) / p_draft(x)`.
+5. **Verification** determines the longest accepted path:
+   - **Greedy** (temperature = 0): accept when `argmax(p_target) == draft token`.
+   - **Stochastic** (temperature > 0): rejection sampling over all branches via DFS;
+     at each node accept if `p_target ≥ p_draft`, else accept with probability
+     `p_target / p_draft`; the longest accepted path across the tree is chosen.
 6. **Accepted tokens + optional correction** → returned to Orchestrator.
 7. Orchestrator appends accepted tokens and loops back to step 2.
 8. When generation completes, the Orchestrator calls `EndSession` to free
@@ -81,7 +83,7 @@ The gRPC protocol (`spec_decoding.proto`) defines:
 | `core/config.py`    | Pydantic settings with env var override (`SPECSPLIT_*`) |
 | `core/serialization.py` | Tensor ↔ list conversion at gRPC boundary          |
 | `core/telemetry.py` | Nanosecond-precision timing + JSON span export          |
-| `core/verification.py` | Greedy tree verification math (argmax + DFS)        |
+| `core/verification.py` | Greedy and stochastic tree verification (argmax or rejection sampling + DFS) |
 | `workers/draft/`    | Stateful draft generation with KV cache management      |
 | `workers/target/engine.py` | Session-based KV-cached tree-attention verification |
 | `workers/target/tree_attn.py` | Custom tree attention mask + position ID construction |

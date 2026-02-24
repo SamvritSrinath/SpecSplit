@@ -15,7 +15,9 @@ tests/
 │   ├── test_telemetry.py           #   Stopwatch + TelemetryLogger
 │   ├── test_config.py              #   Pydantic config validation
 │   ├── test_draft_engine.py        #   DraftEngine init + stub generation
-│   └── test_target_engine.py       #   Session caching, rollback, verification
+│   ├── test_target_engine.py       #   Session caching, rollback, verification
+│   ├── test_verification.py        #   Greedy + stochastic tree verification
+│   └── test_pipeline.py            #   _get_longest_path, pipeline helpers
 └── integration/                    # Requires transformers + torch
     ├── test_grpc_roundtrip.py      #   gRPC service binding smoke tests
     ├── test_exact_match.py         #   Speculative vs standard generation
@@ -25,6 +27,9 @@ tests/
 ---
 
 ## Running Tests
+
+Activate the project virtual environment before running tests (e.g.
+`source .venv/bin/activate`). Then:
 
 ### All Tests
 
@@ -81,6 +86,8 @@ GPU.  These must run in < 5 seconds total.
 | `test_config.py` | Pydantic defaults, env var override, field validation | Monkeypatch |
 | `test_draft_engine.py` | `DraftEngine` init, stub tree generation, `TokenNode.to_dict()` | `draft_config` |
 | `test_target_engine.py` | Session create/reuse/evict, `rollback_cache` tensor cropping, verify with sessions | `target_engine`, `fake_kv_cache` |
+| `test_verification.py` | `verify_greedy_tree` and `verify_stochastic_tree` (paths, branching, shape validation) | — |
+| `test_pipeline.py` | `_get_longest_path` (single chain, branching, tie-break) | — |
 
 ### Integration Tests (`tests/integration/`)
 

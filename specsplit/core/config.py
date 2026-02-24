@@ -85,6 +85,19 @@ class TargetWorkerConfig(BaseSettings):
         description="Maximum concurrent KV cache sessions. Oldest sessions "
         "are evicted (LRU) when this limit is reached.",
     )
+    max_tree_nodes: int = Field(
+        default=2048,
+        ge=1,
+        le=65536,
+        description="Maximum number of nodes in a draft tree per VerifyDrafts request. "
+        "Requests exceeding this are rejected to limit resource use.",
+    )
+    max_prompt_tokens: int = Field(
+        default=8192,
+        ge=1,
+        description="Maximum prompt length (token count) per request. "
+        "Requests exceeding this are rejected.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_TARGET_"}
 

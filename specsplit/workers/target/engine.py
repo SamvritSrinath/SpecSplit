@@ -29,7 +29,7 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch
-from specsplit.core.verification import verify_greedy_tree
+from specsplit.core.verification import verify_greedy_tree, verify_stochastic_tree
 from specsplit.workers.target.tree_attn import (
     bool_mask_to_float,
     build_tree_attention,
@@ -470,8 +470,6 @@ class TargetEngine:
             target_probs = torch.softmax(tree_logits / temperature, dim=-1)
             # Convert draft log_probs back to probabilities
             draft_probs = torch.exp(torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device))
-            
-            from specsplit.core.verification import verify_stochastic_tree
             result_data = verify_stochastic_tree(
                 draft_tokens=draft_tokens_tensor,
                 draft_probs=draft_probs,
