@@ -53,6 +53,44 @@ def _make_mock_tokenizer() -> MagicMock:
     return tokenizer
 
 
+def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> MagicMock:
+    """Like _make_mock_model but records the past_key_values argument of every call.
+
+    Access ``model.call_log`` after generation to inspect which calls used a
+    pre-existing KV cache (``past_key_values is not None``) vs computed from
+    scratch (``past_key_values is None``).
+    """
+    call_log: list = []
+
+    model = MagicMock()
+    model.dtype = torch.float16
+    model.to.return_value = model
+    model.eval.return_value = model
+
+    def fake_forward(input_ids, past_key_values=None, use_cache=True, **kwargs):
+        call_log.append(past_key_values)
+        batch, seq_len = input_ids.shape
+        logits = torch.zeros(batch, seq_len, vocab_size)
+        logits[:, :, deterministic_token] = 10.0
+
+        cache_len = seq_len
+        if past_key_values is not None:
+            cache_len += past_key_values[0][0].shape[2]
+        fake_kv = tuple(
+            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+        )
+
+        out = MagicMock()
+        out.logits = logits
+        out.past_key_values = fake_kv
+        return out
+
+    model.call_log = call_log
+    model.side_effect = fake_forward
+    model.__call__ = fake_forward
+    return model
+
+
 class TestDraftEngine:
     """Tests for DraftEngine initialization and generation with mocked model."""
 
@@ -165,3 +203,113 @@ class TestDraftEngine:
         """reset_cache should not raise."""
         engine = DraftEngine(config=draft_config)
         engine.reset_cache()  # Should not raise
+
+
+class TestDraftEngineKVCache:
+    """Tests for cross-round KV cache reuse in DraftEngine."""
+
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_cache_fields_populated_after_first_call(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        draft_config: DraftWorkerConfig,
+    ) -> None:
+        """All three cache fields should be set after the first generate call."""
+        mock_model_cls.return_value = _make_tracking_mock_model()
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        engine = DraftEngine(config=draft_config)
+        engine.load_model()
+
+        assert engine._kv_cache is None
+        assert engine._cached_prompt_len == 0
+        assert engine._cached_last_logits is None
+
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
+
+        assert engine._kv_cache is not None
+        assert engine._cached_prompt_len == 3
+        assert engine._cached_last_logits is not None
+
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_extended_context_extends_from_cache(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        draft_config: DraftWorkerConfig,
+    ) -> None:
+        """Second call with extended context should not recompute the prefix from scratch."""
+        mock_model = _make_tracking_mock_model()
+        mock_model_cls.return_value = mock_model
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        engine = DraftEngine(config=draft_config)
+        engine.load_model()
+
+        # Round 1: original prompt — one from-scratch prefix call expected
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
+        null_kv_after_round1 = sum(1 for kv in mock_model.call_log if kv is None)
+
+        # Round 2: context grew by 2 accepted tokens
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3, 42, 42], k=2, num_beams=1)
+        null_kv_after_round2 = sum(1 for kv in mock_model.call_log if kv is None)
+
+        assert null_kv_after_round1 == 1  # Round 1 did one full prefix recompute
+        assert null_kv_after_round2 == 1  # Round 2 added no from-scratch calls
+        assert engine._cached_prompt_len == 5
+
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_exact_match_skips_prefix_forward_pass(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        draft_config: DraftWorkerConfig,
+    ) -> None:
+        """Second call with identical prompt skips the prefix forward pass entirely."""
+        mock_model = _make_tracking_mock_model()
+        mock_model_cls.return_value = mock_model
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        engine = DraftEngine(config=draft_config)
+        engine.load_model()
+
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
+        calls_after_first = len(mock_model.call_log)
+
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
+        calls_after_second = len(mock_model.call_log)
+
+        second_call_count = calls_after_second - calls_after_first
+        # First call: 1 prefix + 2 BFS tree calls = 3 total
+        # Second call: 0 prefix + 2 BFS tree calls = 2 total (one fewer)
+        assert second_call_count == calls_after_first - 1
+
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_reset_cache_clears_all_fields(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        draft_config: DraftWorkerConfig,
+    ) -> None:
+        """reset_cache should clear _kv_cache, _cached_prompt_len, and _cached_last_logits."""
+        mock_model_cls.return_value = _make_tracking_mock_model()
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        engine = DraftEngine(config=draft_config)
+        engine.load_model()
+
+        engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
+        assert engine._kv_cache is not None
+        assert engine._cached_prompt_len == 3
+        assert engine._cached_last_logits is not None
+
+        engine.reset_cache()
+
+        assert engine._kv_cache is None
+        assert engine._cached_prompt_len == 0
+        assert engine._cached_last_logits is None

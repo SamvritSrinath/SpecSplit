@@ -45,6 +45,13 @@ def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
     }
 
 
+def _count_tree_nodes(roots: list[dict[str, Any]]) -> int:
+    """Count total number of nodes in a tree represented as list of root dicts."""
+    return sum(
+        1 + _count_tree_nodes(n.get("children", [])) for n in roots
+    )
+
+
 # ---------------------------------------------------------------------------
 # gRPC Servicer
 # ---------------------------------------------------------------------------
@@ -58,15 +65,18 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
 
     Args:
         engine: The target verification engine.
+        config: Target worker config (for request size limits).
         telemetry: Optional telemetry logger for span collection.
     """
 
     def __init__(
         self,
         engine: TargetEngine,
+        config: TargetWorkerConfig | None = None,
         telemetry: TelemetryLogger | None = None,
     ) -> None:
         self._engine = engine
+        self._config = config or TargetWorkerConfig()
         self._telemetry = telemetry or TelemetryLogger(service_name="target-worker")
 
     def VerifyDrafts(  # noqa: N802
@@ -95,7 +105,18 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             session_id=session_id or "stateless",
         ):
             prompt_ids: list[int] = list(request.prompt_token_ids)
+            if len(prompt_ids) > self._config.max_prompt_tokens:
+                context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT,
+                    f"prompt length {len(prompt_ids)} exceeds max_prompt_tokens ({self._config.max_prompt_tokens})",
+                )
             draft_tree: list[dict[str, Any]] = [_from_proto_node(n) for n in request.draft_tree]
+            num_nodes = _count_tree_nodes(draft_tree)
+            if num_nodes > self._config.max_tree_nodes:
+                context.abort(
+                    grpc.StatusCode.INVALID_ARGUMENT,
+                    f"draft tree has {num_nodes} nodes, exceeds max_tree_nodes ({self._config.max_tree_nodes})",
+                )
 
             result = self._engine.verify_draft_tree(
                 prompt_ids,
@@ -175,7 +196,7 @@ def serve(config: TargetWorkerConfig | None = None) -> None:
 
     server = grpc.server(futures.ThreadPoolExecutor(max_workers=config.max_workers))
 
-    servicer = TargetServiceServicer(engine)
+    servicer = TargetServiceServicer(engine, config=config)
     spec_decoding_pb2_grpc.add_TargetServiceServicer_to_server(servicer, server)
 
     bind_address = f"[::]:{config.grpc_port}"

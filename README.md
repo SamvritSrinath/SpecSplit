@@ -53,10 +53,10 @@ target model's compute-bound verification step.
 
 By exploiting this latency gap, NetSpec enables a heterogeneous serving topology:
 
-| Component | Hardware | Hourly Cost (est.) | Utilization |
-|-----------|----------|--------------------|-------------|
-| Draft Worker | T4 / L4 (16 GB) | ~$0.35 | ~95% (autoregressive) |
-| Target Worker | A100 (80 GB) | ~$3.50 | ~85% (batched tree-attn) |
+| Component     | Hardware        | Hourly Cost (est.) | Utilization              |
+| ------------- | --------------- | ------------------ | ------------------------ |
+| Draft Worker  | T4 / L4 (16 GB) | ~$0.35             | ~95% (autoregressive)    |
+| Target Worker | A100 (80 GB)    | ~$3.50             | ~85% (batched tree-attn) |
 
 The draft model runs on commodity GPUs at near-full utilization, while the
 expensive accelerator is reserved exclusively for high-throughput verification.
@@ -110,7 +110,7 @@ graph TB
 3. **Token Tree + `session_id`** → forwarded to the Target Worker via gRPC.
 4. **Target Worker** performs a single batched forward pass with **tree attention** (custom causal masks ensuring each node attends only to its ancestors) to score all candidate paths simultaneously.
 5. **Greedy verification** determines the longest accepted prefix:
-   - If `argmax(p_target) == argmax(p_draft)` at position *i*: token **accepted**.
+   - If `argmax(p_target) == argmax(p_draft)` at position _i_: token **accepted**.
    - Otherwise: divergence detected; the target's token is emitted as a **correction**.
 6. **Accepted tokens + optional correction** → returned to the Orchestrator.
 7. Orchestrator appends accepted tokens, rolls forward the context, and **loops back to step 2**.
@@ -118,13 +118,13 @@ graph TB
 
 ### gRPC Protocol (`spec_decoding.proto`)
 
-| Service | RPC | Purpose |
-|---------|-----|---------|
-| `DraftService` | `GenerateDrafts` | Generate speculative token trees |
-| `DraftService` | `Ping` | Health check |
-| `TargetService` | `VerifyDrafts` | Verify draft trees (with session KV cache) |
-| `TargetService` | `EndSession` | Release a session's KV cache |
-| `TargetService` | `Ping` | Health check |
+| Service         | RPC              | Purpose                                    |
+| --------------- | ---------------- | ------------------------------------------ |
+| `DraftService`  | `GenerateDrafts` | Generate speculative token trees           |
+| `DraftService`  | `Ping`           | Health check                               |
+| `TargetService` | `VerifyDrafts`   | Verify draft trees (with session KV cache) |
+| `TargetService` | `EndSession`     | Release a session's KV cache               |
+| `TargetService` | `Ping`           | Health check                               |
 
 **Key message type:** `TokenNode` — a recursive tree node `{token_id, log_prob, children[]}`.
 
@@ -145,31 +145,41 @@ graph TB
 git clone https://github.com/SamvritSrinath/SpecSplit.git
 cd SpecSplit
 
-# 2. Install in editable mode with dev dependencies
+# 2. Create and activate a virtual environment (recommended)
+python -m venv .venv && source .venv/bin/activate   # Linux/macOS
+
+# 3. Install in editable mode with dev dependencies
 pip install -e ".[dev]"
 
-# 3. Generate gRPC Python stubs from protobuf definitions
+# 4. Generate gRPC Python stubs from protobuf definitions
 make proto
 
-# 4. Verify the installation
+# 5. Verify the installation (with venv activated)
 make test               # unit tests only
 make lint               # ruff linter
 make typecheck          # mypy static analysis
 ```
 
+See [docs/project_guide.md](docs/project_guide.md) for more setup options.
+
 ### Development Commands
 
-| Command | Description |
-|---------|-------------|
-| `make install` | Editable install with dev dependencies |
-| `make proto` | Generate Python stubs from `.proto` definitions |
-| `make test` | Run unit tests (excludes integration) |
-| `make test-all` | Run all tests (unit + integration) |
-| `make test-cov` | Run tests with HTML coverage report |
-| `make lint` | Run ruff linter |
-| `make typecheck` | Run mypy type checker |
-| `make format` | Auto-format code with ruff |
-| `make clean` | Remove caches, build artifacts, and generated stubs |
+| Command          | Description                                         |
+| ---------------- | --------------------------------------------------- |
+| `make install`   | Editable install with dev dependencies              |
+| `make proto`     | Generate Python stubs from `.proto` definitions     |
+| `make test`      | Run unit tests (excludes integration)               |
+| `make test-all`  | Run all tests (unit + integration)                  |
+| `make test-cov`  | Run tests with HTML coverage report                 |
+| `make lint`      | Run ruff linter                                     |
+| `make typecheck` | Run mypy type checker                               |
+| `make format`    | Auto-format code with ruff                          |
+| `make clean`     | Remove caches, build artifacts, and generated stubs |
+
+### Running tests
+
+- **Unit tests** (fast, no model download):  
+  `make test` or `pytest tests/unit/ -v`
 
 ---
 
@@ -210,10 +220,9 @@ SPECSPLIT_ORCH_TARGET_ADDRESS=localhost:50052 \
         --telemetry-output telemetry_spans.json
 ```
 
-> **Note:** For local testing without GPUs, the default models (`gpt2` for draft,
-> `meta-llama/Llama-2-7b-hf` for target) can be run on CPU by setting
-> `SPECSPLIT_DRAFT_DEVICE=cpu` and `SPECSPLIT_TARGET_DEVICE=cpu`, though
-> performance will not be representative of the production configuration.
+> **Note:** For local testing without GPUs, use CPU mode by setting
+> `SPECSPLIT_DRAFT_DEVICE=cpu` and `SPECSPLIT_TARGET_DEVICE=cpu`. CPU mode is
+> for development and testing only; performance is not representative of production.
 
 ---
 
@@ -262,18 +271,18 @@ python scripts/benchmark_run.py \
 
 Each row in the output CSV contains:
 
-| Column | Unit | Description |
-|--------|------|-------------|
-| `request_id` | — | Unique identifier per request |
-| `gamma` | int | Draft tree depth (K) used |
-| `prompt_length` | tokens | Estimated prompt token count |
-| `generated_tokens` | tokens | Number of output tokens produced |
-| `ttft_ms` | ms | **Time-to-First-Token** — latency to produce the first output token |
-| `tpot_ms` | ms | **Time-Per-Output-Token** — average inter-token latency |
-| `average_acceptance_rate` | 0–1 | Mean fraction of draft tokens accepted per round |
-| `total_network_idle_ms` | ms | Cumulative gRPC round-trip overhead |
-| `total_latency_ms` | ms | End-to-end wall-clock time for the full request |
-| `num_rounds` | int | Number of draft→verify iterations executed |
+| Column                    | Unit   | Description                                                         |
+| ------------------------- | ------ | ------------------------------------------------------------------- |
+| `request_id`              | —      | Unique identifier per request                                       |
+| `gamma`                   | int    | Draft tree depth (K) used                                           |
+| `prompt_length`           | tokens | Estimated prompt token count                                        |
+| `generated_tokens`        | tokens | Number of output tokens produced                                    |
+| `ttft_ms`                 | ms     | **Time-to-First-Token** — latency to produce the first output token |
+| `tpot_ms`                 | ms     | **Time-Per-Output-Token** — average inter-token latency             |
+| `average_acceptance_rate` | 0–1    | Mean fraction of draft tokens accepted per round                    |
+| `total_network_idle_ms`   | ms     | Cumulative gRPC round-trip overhead                                 |
+| `total_latency_ms`        | ms     | End-to-end wall-clock time for the full request                     |
+| `num_rounds`              | int    | Number of draft→verify iterations executed                          |
 
 ### Summary Output
 
@@ -309,22 +318,35 @@ SPECSPLIT_ORCH_TARGET_ADDRESS=gpu2:50052 \
 All configuration is managed via [Pydantic Settings](https://docs.pydantic.dev/latest/concepts/pydantic_settings/)
 and can be overridden with environment variables:
 
-| Variable | Default | Component | Description |
-|----------|---------|-----------|-------------|
-| `SPECSPLIT_DRAFT_MODEL_NAME` | `gpt2` | Draft Worker | HuggingFace model ID |
-| `SPECSPLIT_DRAFT_DEVICE` | `cuda:0` | Draft Worker | Torch device string |
-| `SPECSPLIT_DRAFT_MAX_DRAFT_TOKENS` | `5` | Draft Worker | Tree depth (K) |
-| `SPECSPLIT_DRAFT_NUM_BEAMS` | `1` | Draft Worker | Branching factor |
-| `SPECSPLIT_DRAFT_GRPC_PORT` | `50051` | Draft Worker | gRPC listen port |
-| `SPECSPLIT_TARGET_MODEL_NAME` | `meta-llama/Llama-2-7b-hf` | Target Worker | HuggingFace model ID |
-| `SPECSPLIT_TARGET_DEVICE` | `cuda:0` | Target Worker | Torch device string |
-| `SPECSPLIT_TARGET_GRPC_PORT` | `50052` | Target Worker | gRPC listen port |
-| `SPECSPLIT_TARGET_MAX_SESSIONS` | `16` | Target Worker | Max concurrent KV sessions |
-| `SPECSPLIT_ORCH_DRAFT_ADDRESS` | `localhost:50051` | Orchestrator | Draft Worker address |
-| `SPECSPLIT_ORCH_TARGET_ADDRESS` | `localhost:50052` | Orchestrator | Target Worker address |
-| `SPECSPLIT_ORCH_MAX_ROUNDS` | `20` | Orchestrator | Max draft→verify rounds |
-| `SPECSPLIT_ORCH_TIMEOUT_S` | `30.0` | Orchestrator | Per-RPC timeout (seconds) |
-| `SPECSPLIT_ORCH_MAX_OUTPUT_TOKENS` | `256` | Orchestrator | Max tokens per generation |
+| Variable                             | Default                    | Component     | Description                                         |
+| ------------------------------------ | -------------------------- | ------------- | --------------------------------------------------- |
+| `SPECSPLIT_DRAFT_MODEL_NAME`         | `gpt2`                     | Draft Worker  | HuggingFace model ID                                |
+| `SPECSPLIT_DRAFT_DEVICE`             | `cuda:0`                   | Draft Worker  | Torch device string                                 |
+| `SPECSPLIT_DRAFT_MAX_DRAFT_TOKENS`   | `5`                        | Draft Worker  | Tree depth (K)                                      |
+| `SPECSPLIT_DRAFT_NUM_BEAMS`          | `1`                        | Draft Worker  | Branching factor                                    |
+| `SPECSPLIT_DRAFT_GRPC_PORT`          | `50051`                    | Draft Worker  | gRPC listen port                                    |
+| `SPECSPLIT_TARGET_MODEL_NAME`        | `meta-llama/Llama-2-7b-hf` | Target Worker | HuggingFace model ID                                |
+| `SPECSPLIT_TARGET_DEVICE`            | `cuda:0`                   | Target Worker | Torch device string                                 |
+| `SPECSPLIT_TARGET_GRPC_PORT`         | `50052`                    | Target Worker | gRPC listen port                                    |
+| `SPECSPLIT_TARGET_MAX_SESSIONS`      | `16`                       | Target Worker | Max concurrent KV sessions                          |
+| `SPECSPLIT_TARGET_MAX_TREE_NODES`    | `2048`                     | Target Worker | Max draft tree nodes per request (input validation) |
+| `SPECSPLIT_TARGET_MAX_PROMPT_TOKENS` | `8192`                     | Target Worker | Max prompt length per request (input validation)    |
+| `SPECSPLIT_ORCH_DRAFT_ADDRESS`       | `localhost:50051`          | Orchestrator  | Draft Worker address                                |
+| `SPECSPLIT_ORCH_TARGET_ADDRESS`      | `localhost:50052`          | Orchestrator  | Target Worker address                               |
+| `SPECSPLIT_ORCH_MAX_ROUNDS`          | `20`                       | Orchestrator  | Max draft→verify rounds                             |
+| `SPECSPLIT_ORCH_TIMEOUT_S`           | `30.0`                     | Orchestrator  | Per-RPC timeout (seconds)                           |
+| `SPECSPLIT_ORCH_MAX_OUTPUT_TOKENS`   | `256`                      | Orchestrator  | Max tokens per generation                           |
+
+---
+
+## Security and deployment
+
+- **No built-in auth or TLS:** gRPC services listen on plain TCP. Use only in
+  trusted networks (e.g. same VPC). For untrusted or internet-facing deployments,
+  add authentication (e.g. gRPC interceptors) and TLS.
+- **Input limits:** The Target Worker rejects requests whose prompt length or
+  draft tree size exceeds `SPECSPLIT_TARGET_MAX_PROMPT_TOKENS` and
+  `SPECSPLIT_TARGET_MAX_TREE_NODES` to limit resource use.
 
 ---
 

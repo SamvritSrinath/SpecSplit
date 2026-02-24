@@ -272,3 +272,117 @@ def verify_greedy_tree(
     )
 
     return result
+
+@dataclass
+class VerificationResultData:
+    """Standardized result for both greedy and stochastic verification."""
+    accepted_tokens: list[int]
+    bonus_token: int
+    num_accepted: int
+    accepted_leaf_index: int
+
+def verify_stochastic_tree(
+    draft_tokens: torch.Tensor,
+    draft_probs: torch.Tensor,
+    target_probs: torch.Tensor,
+    topology_map: list[int],
+) -> VerificationResultData:
+    """Perform stochastic verification with rejection sampling over the full tree.
+
+    Explores all root-to-leaf paths via DFS. At each node, the draft token is
+    accepted if p_target >= p_draft, otherwise accepted with probability
+    p_target / p_draft. The longest accepted path across all branches is chosen;
+    the bonus (correction) token is sampled from the target distribution at the
+    divergence node (rejection point) or at the accepted leaf.
+
+    Args:
+        draft_tokens: [num_nodes] tensor of drafted token IDs.
+        draft_probs: [num_nodes] tensor of probabilities the draft assigned to
+            the drafted token at each node.
+        target_probs: [num_nodes, vocab_size] tensor of target model probabilities.
+        topology_map: List mapping node index to parent index (-1 for root).
+
+    Returns:
+        VerificationResultData with the longest accepted path and sampled bonus token.
+
+    Raises:
+        ValueError: If shapes are inconsistent or the tree has no root nodes.
+    """
+    num_tree_nodes = len(topology_map)
+    if draft_tokens.shape[0] != num_tree_nodes:
+        raise ValueError(
+            f"draft_tokens length ({draft_tokens.shape[0]}) != "
+            f"topology_map length ({num_tree_nodes})"
+        )
+    if draft_probs.shape[0] != num_tree_nodes:
+        raise ValueError(
+            f"draft_probs length ({draft_probs.shape[0]}) != "
+            f"topology_map length ({num_tree_nodes})"
+        )
+    if target_probs.shape[0] != num_tree_nodes:
+        raise ValueError(
+            f"target_probs first dim ({target_probs.shape[0]}) != "
+            f"topology_map length ({num_tree_nodes})"
+        )
+
+    if num_tree_nodes == 0:
+        return VerificationResultData(
+            accepted_tokens=[],
+            bonus_token=-1,
+            num_accepted=0,
+            accepted_leaf_index=-1,
+        )
+
+    children: dict[int, list[int]] = {}
+    for i, p in enumerate(topology_map):
+        children.setdefault(p, []).append(i)
+    roots = children.get(-1, [])
+    if not roots:
+        raise ValueError("verify_stochastic_tree: draft tree has no root nodes")
+
+    best_path: list[int] = []
+    best_divergence_node = -1
+    stack: list[tuple[int, list[int]]] = [(r, []) for r in roots]
+
+    while stack:
+        node_idx, path = stack.pop()
+        token_id = draft_tokens[node_idx].item()
+        p_val = target_probs[node_idx, token_id].item()
+        q_val = draft_probs[node_idx].item()
+
+        if q_val <= 0:
+            accepted = False
+        elif p_val >= q_val:
+            accepted = True
+        else:
+            accepted = torch.rand(1).item() < (p_val / q_val)
+
+        if not accepted:
+            if len(path) > len(best_path):
+                best_path = path
+                best_divergence_node = node_idx
+            elif best_divergence_node < 0:
+                # Rejection at root or first node: use this node for bonus sampling.
+                best_divergence_node = node_idx
+            continue
+
+        new_path = [*path, node_idx]
+        if len(new_path) > len(best_path):
+            best_path = new_path
+            best_divergence_node = node_idx
+        for c in children.get(node_idx, []):
+            stack.append((c, new_path))
+
+    accepted_tokens = [draft_tokens[i].item() for i in best_path]
+    if best_divergence_node >= 0:
+        p_dist = target_probs[best_divergence_node]
+        bonus_token = torch.multinomial(p_dist, 1).item()
+    else:
+        bonus_token = -1
+    current_node = best_path[-1] if best_path else -1
+    return VerificationResultData(
+        accepted_tokens=accepted_tokens,
+        bonus_token=bonus_token,
+        num_accepted=len(accepted_tokens),
+        accepted_leaf_index=current_node,
+    )

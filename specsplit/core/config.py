@@ -85,6 +85,19 @@ class TargetWorkerConfig(BaseSettings):
         description="Maximum concurrent KV cache sessions. Oldest sessions "
         "are evicted (LRU) when this limit is reached.",
     )
+    max_tree_nodes: int = Field(
+        default=2048,
+        ge=1,
+        le=65536,
+        description="Maximum number of nodes in a draft tree per VerifyDrafts request. "
+        "Requests exceeding this are rejected to limit resource use.",
+    )
+    max_prompt_tokens: int = Field(
+        default=8192,
+        ge=1,
+        description="Maximum prompt length (token count) per request. "
+        "Requests exceeding this are rejected.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_TARGET_"}
 
@@ -121,5 +134,7 @@ class OrchestratorConfig(BaseSettings):
         le=64,
         description="Draft tree depth (K / gamma) forwarded to the Draft Worker.",
     )
+    # Task 4.1: Synthetic Latency Rig (milliseconds)
+    simulated_rtt_ms: float = Field(default=0.0, description="Injected network latency per RPC")
 
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}
