@@ -126,6 +126,13 @@ class TargetWorkerConfig(BaseSettings):
         description="Maximum prompt length (token count) per request. "
         "Requests exceeding this are rejected.",
     )
+    session_ttl_seconds: float = Field(
+        default=300.0,
+        ge=30.0,
+        description="Time-to-live for KV cache sessions in seconds. "
+        "Sessions not accessed within this period are garbage-collected "
+        "to free GPU memory from zombie connections.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_TARGET_"}
 
@@ -161,6 +168,13 @@ class OrchestratorConfig(BaseSettings):
         ge=1,
         le=64,
         description="Draft tree depth (K / gamma) forwarded to the Draft Worker.",
+    )
+    max_context_window: int = Field(
+        default=4096,
+        ge=512,
+        description="Maximum context window size (prompt + generated tokens). "
+        "Generation terminates gracefully when this limit is approached, "
+        "preventing CUDA/HF dimensionality crashes.",
     )
     # Task 4.1: Synthetic Latency Rig (milliseconds)
     simulated_rtt_ms: float = Field(default=0.0, description="Injected network latency per RPC")

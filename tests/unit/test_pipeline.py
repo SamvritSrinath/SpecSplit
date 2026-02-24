@@ -3,17 +3,12 @@
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 from typing import Any
-from unittest.mock import MagicMock
-
-import pytest
 
 from specsplit.core.config import OrchestratorConfig
 from specsplit.proto import spec_decoding_pb2
 from specsplit.workers.orchestrator.pipeline import (
     DraftTree,
-    PipelineResult,
     _flatten_proto_tree,
     _get_longest_path,
     run_speculative_loop_async,
@@ -201,13 +196,13 @@ class _FakeStub:
         # Repeat last response as a safe fallback
         return self._responses[-1]
 
-    def GenerateDrafts(self, request: Any) -> Any:  # noqa: N802
+    def GenerateDrafts(self, request: Any, **kwargs: Any) -> Any:  # noqa: N802
         return self._next(request)
 
-    def VerifyDrafts(self, request: Any) -> Any:  # noqa: N802
+    def VerifyDrafts(self, request: Any, **kwargs: Any) -> Any:  # noqa: N802
         return self._next(request)
 
-    def EndSession(self, request: Any) -> Any:  # noqa: N802
+    def EndSession(self, request: Any, **kwargs: Any) -> Any:  # noqa: N802
         return spec_decoding_pb2.EndSessionResponse(was_active=False)
 
 

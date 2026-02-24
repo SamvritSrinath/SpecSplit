@@ -60,7 +60,6 @@ Consider a tree with topology_map = [-1, 0, 0, 1, 2] and prefix_length = 3::
 from __future__ import annotations
 
 import logging
-from typing import Any
 
 import torch
 

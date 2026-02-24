@@ -89,7 +89,9 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
         ):
             # Issue 9: Invalidate draft KV cache on speculation miss
             if request.reset_cache:
-                self._engine.reset_cache()
+                self._engine.reset_cache(
+                    session_id=request.session_id or None,
+                )
                 logger.info("Draft KV cache reset (reset_cache=True)")
 
             prompt_ids: list[int] = list(request.prompt_token_ids)
@@ -100,6 +102,7 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
                 k=request.max_draft_len or None,
                 num_beams=request.num_beams or None,
                 temperature=request.temperature or None,
+                session_id=request.session_id or None,
             )
             sw.stop()
 

@@ -140,7 +140,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # Issue 17 / 30: We must avoid conflating "no correction" (None -> 0)
             # with "correction token is 0". We will add a has_correction flag to proto.
             has_corr = result.correction_token_id is not None
-            
+
             response = spec_decoding_pb2.VerifyResponse(
                 request_id=request.request_id,
                 accepted_token_ids=result.accepted_token_ids,

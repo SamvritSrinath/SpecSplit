@@ -335,6 +335,42 @@ class StaticKVCache:
         return tuple(layers)
 
     # ------------------------------------------------------------------ #
+    # HuggingFace Adapter
+    # ------------------------------------------------------------------ #
+
+    @staticmethod
+    def stack_hf_cache(
+        past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Convert HuggingFace's cache format to 5D tensors for ``append()``.
+
+        HuggingFace models output ``past_key_values`` as::
+
+            tuple[  # num_layers
+                tuple[
+                    Tensor[batch, heads, seq, head_dim],  # keys
+                    Tensor[batch, heads, seq, head_dim],  # values
+                ],
+                ...
+            ]
+
+        This method stacks them into unified 5D tensors::
+
+            keys:   [num_layers, batch, heads, seq, head_dim]
+            values: [num_layers, batch, heads, seq, head_dim]
+
+        Args:
+            past_key_values: HuggingFace ``past_key_values`` tuple.
+
+        Returns:
+            A ``(stacked_keys, stacked_values)`` tuple of 5D tensors
+            suitable for passing to ``StaticKVCache.append()``.
+        """
+        keys = torch.stack([layer[0] for layer in past_key_values], dim=0)
+        values = torch.stack([layer[1] for layer in past_key_values], dim=0)
+        return keys, values
+
+    # ------------------------------------------------------------------ #
     # Reset
     # ------------------------------------------------------------------ #
 

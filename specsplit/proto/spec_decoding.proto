@@ -63,6 +63,8 @@ message DraftRequest {
   float   temperature    = 5;  // Sampling temperature for draft generation.
   bool    reset_cache    = 6;  // If true, clear draft KV cache before generating
                                // (used after speculation misses).
+  string  session_id     = 7;  // Session ID for per-session KV cache isolation.
+                               // Required for thread-safe concurrent requests.
 }
 
 // Response containing the generated draft tree.
@@ -79,12 +81,15 @@ message DraftResponse {
 // Request to verify a draft tree against the target model.
 message VerifyRequest {
   string  request_id     = 1;  // Unique request identifier for tracing.
-  repeated int32 prompt_token_ids = 2;  // Original prompt context.
+  repeated int32 prompt_token_ids = 2;  // Full prompt context (sent on round 0 or after cache flush).
   repeated TokenNode draft_tree    = 3;  // Draft tree to verify.
   string  session_id     = 4;  // Session ID for KV cache reuse across rounds.
                                // If empty, verification is stateless (no caching).
   float   temperature    = 5;  // Sampling temperature for verification.
                                // 0.0 = greedy, >0.0 = stochastic rejection sampling.
+  repeated int32 new_token_ids = 6;  // Delta tokens since last verified position.
+                                     // When non-empty, replaces prompt_token_ids for
+                                     // context reconstruction (Issue 11 optimisation).
 }
 
 // Response containing verification results.

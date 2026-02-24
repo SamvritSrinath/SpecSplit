@@ -280,6 +280,7 @@ class VerificationResultData:
     bonus_token: int
     num_accepted: int
     accepted_leaf_index: int
+    accepted_indices: list[int] = None  # BFS indices of accepted nodes (for KV cache compaction)
 
 def verify_stochastic_tree(
     draft_tokens: torch.Tensor,
@@ -389,4 +390,5 @@ def verify_stochastic_tree(
         bonus_token=bonus_token,
         num_accepted=len(accepted_tokens),
         accepted_leaf_index=current_node,
+        accepted_indices=list(best_path),
     )

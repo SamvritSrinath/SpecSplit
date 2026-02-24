@@ -16,6 +16,7 @@ import argparse
 import asyncio
 import logging
 import os
+import uuid
 from typing import Any
 
 import grpc
@@ -102,17 +103,28 @@ class Orchestrator:
         if self._target_channel is not None:
             await self._target_channel.close()
             self._target_channel = None
-            
+
         logger.info("Async gRPC channels closed")
 
-    async def run_with_result(self, prompt: str) -> tuple[str, PipelineResult]:
+    async def run_with_result(
+        self,
+        prompt: str,
+        session_id: str | None = None,
+    ) -> tuple[str, PipelineResult]:
         """Run the full speculative decoding pipeline for a given prompt.
 
         Tokenizes the prompt, executes the async speculative loop over
         gRPC, and decodes the resulting tokens back to a string.
 
+        Issue 7: Generates a unique session ID per call when KV caching
+        is enabled, preventing cross-prompt cache pollution. Sends
+        ``EndSession`` RPC in a ``finally`` block to prevent leaks.
+
         Args:
             prompt: The user's input text prompt.
+            session_id: Optional caller-supplied session ID. If not
+                provided and KV caching is enabled, a unique ID is
+                generated automatically.
 
         Returns:
             A tuple of (generated output text, PipelineResult with full metrics).
@@ -123,29 +135,52 @@ class Orchestrator:
         prompt_ids: list[int] = tokenizer.encode(prompt)
         eos_token_id: int = tokenizer.eos_token_id or 2
 
-        session_id = None if not self.config.use_target_kv_cache else "default"
-        with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
-            result: PipelineResult = await run_speculative_loop_async(
-                draft_stub=self._draft_stub,
-                target_stub=self._target_stub,
-                prompt_ids=prompt_ids,
-                config=self.config,
-                session_id=session_id,
-                eos_token_id=eos_token_id,
-            )
+        # Issue 7: Generate unique session ID per request (not "default")
+        if session_id is None:
+            session_id = uuid.uuid4().hex if self.config.use_target_kv_cache else None
 
-            output_text = tokenizer.decode(
-                result.output_tokens,
-                skip_special_tokens=True,
-            )
+        try:
+            with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
+                result: PipelineResult = await run_speculative_loop_async(
+                    draft_stub=self._draft_stub,
+                    target_stub=self._target_stub,
+                    prompt_ids=prompt_ids,
+                    config=self.config,
+                    session_id=session_id,
+                    eos_token_id=eos_token_id,
+                )
 
-            logger.info(
-                "Pipeline complete: %d tokens in %d rounds, acceptance=%.1f%%, wall_time=%.1f ms",
-                len(result.output_tokens),
-                result.total_rounds,
-                result.acceptance_rate * 100,
-                result.wall_time_ms,
-            )
+                output_text = tokenizer.decode(
+                    result.output_tokens,
+                    skip_special_tokens=True,
+                )
+
+                logger.info(
+                    "Pipeline complete: %d tokens in %d rounds, acceptance=%.1f%%, wall_time=%.1f ms",
+                    len(result.output_tokens),
+                    result.total_rounds,
+                    result.acceptance_rate * 100,
+                    result.wall_time_ms,
+                )
+        finally:
+            # Issue 7: Always clean up the session to prevent KV cache leaks
+            if session_id is not None and self._target_stub is not None:
+                try:
+                    from specsplit.proto import spec_decoding_pb2
+
+                    end_req = spec_decoding_pb2.EndSessionRequest(
+                        session_id=session_id,
+                    )
+                    end_resp = self._target_stub.EndSession(end_req)
+                    if asyncio.iscoroutine(end_resp) or asyncio.isfuture(end_resp):
+                        await end_resp
+                    logger.debug("Session ended: %s", session_id)
+                except Exception:
+                    # EndSession is best-effort cleanup
+                    logger.debug(
+                        "EndSession cleanup failed (non-critical): session=%s",
+                        session_id,
+                    )
 
         return output_text, result
 
@@ -173,7 +208,7 @@ class Orchestrator:
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-            
+
         return loop.run_until_complete(self.run_with_result(prompt))
 
     def run(self, prompt: str) -> str:

@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from collections import OrderedDict, deque
 from dataclasses import dataclass
 from typing import Any
@@ -87,6 +88,7 @@ class KVCacheState:
     past_key_values: tuple[tuple[torch.Tensor, torch.Tensor], ...] | None = None
     seq_len: int = 0
     next_root_logit: torch.Tensor | None = None
+    last_accessed: float = 0.0  # D3: timestamp for TTL garbage collection
 
 
 # =============================================================================
@@ -196,6 +198,7 @@ class TargetEngine:
         self._model: Any = None  # transformers.AutoModelForCausalLM
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._is_loaded = False
+        self._use_4d_mask = True  # D2: set to False when FA2 is detected
 
         # Session → KV cache mapping (LRU ordered).
         # Concurrency: each session_id has a single lock; concurrent requests
@@ -203,11 +206,21 @@ class TargetEngine:
         self._session_caches: OrderedDict[str, KVCacheState] = OrderedDict()
         self._session_locks: dict[str, threading.Lock] = {}
 
+        # D3: Session TTL garbage collection
+        self._session_ttl_seconds = self.config.session_ttl_seconds
+        self._ttl_thread = threading.Thread(
+            target=self._ttl_gc_loop,
+            daemon=True,
+            name="target-engine-ttl-gc",
+        )
+        self._ttl_thread.start()
+
         logger.info(
-            "TargetEngine initialized (model=%s, device=%s, max_sessions=%d)",
+            "TargetEngine initialized (model=%s, device=%s, max_sessions=%d, ttl=%.0fs)",
             self.config.model_name,
             self.config.device,
             self.config.max_sessions,
+            self._session_ttl_seconds,
         )
 
     # --------------------------------------------------------------------- #
@@ -223,8 +236,8 @@ class TargetEngine:
         device.
         """
         self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
-        if self._tokenizer.pad_token is None:
-            self._tokenizer.pad_token = self._tokenizer.eos_token
+        # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
+        # dense tensors and never use HF batch padding.
 
         self._model = (
             AutoModelForCausalLM.from_pretrained(
@@ -236,6 +249,17 @@ class TargetEngine:
         )
 
         self._is_loaded = True
+
+        # D2: Detect Flash Attention 2 — 4D custom masks are incompatible
+        attn_impl = getattr(self._model.config, '_attn_implementation', None)
+        if attn_impl == 'flash_attention_2':
+            self._use_4d_mask = False
+            logger.warning(
+                "Flash Attention 2 detected — disabling 4D tree attention mask. "
+                "Position IDs will still encode tree structure, but the custom "
+                "attention pattern will not be enforced."
+            )
+
         logger.info("Target model loaded: %s on %s", self.config.model_name, self.device)
 
     # --------------------------------------------------------------------- #
@@ -255,12 +279,14 @@ class TargetEngine:
         if session_id in self._session_caches:
             # Move to end to mark as recently used (LRU)
             self._session_caches.move_to_end(session_id)
+            cache = self._session_caches[session_id]
+            cache.last_accessed = time.time()  # D3: touch timestamp
             logger.debug(
                 "Session cache hit: %s (seq_len=%d)",
                 session_id,
-                self._session_caches[session_id].seq_len,
+                cache.seq_len,
             )
-            return self._session_caches[session_id], True
+            return cache, True
 
         # Enforce max-sessions limit with LRU eviction
         if len(self._session_caches) >= self.config.max_sessions:
@@ -270,7 +296,7 @@ class TargetEngine:
                 "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
             )
 
-        cache = KVCacheState()
+        cache = KVCacheState(last_accessed=time.time())
         self._session_caches[session_id] = cache
         self._session_locks[session_id] = threading.Lock()
         logger.debug("Session cache created: %s", session_id)
@@ -279,45 +305,106 @@ class TargetEngine:
     def end_session(self, session_id: str) -> bool:
         """Terminate a session and free its KV cache from memory.
 
+        Thread-safe: acquires the session lock before destroying the cache
+        to ensure no active ``verify_draft_tree`` thread is using the
+        tensors being deleted (Issue 10).
+
         Args:
             session_id: The session to terminate.
 
         Returns:
             True if the session existed and was removed, False otherwise.
         """
-        cache = self._session_caches.pop(session_id, None)
-        self._session_locks.pop(session_id, None)
-        if cache is not None:
-            # Explicitly delete tensors to free GPU memory
-            cache.past_key_values = None
-            cache.next_root_logit = None
-            logger.info("Session ended and cache released: %s", session_id)
-            return True
-        logger.debug("Session not found (already ended?): %s", session_id)
-        return False
+        lock = self._session_locks.get(session_id)
+        if lock is not None:
+            lock.acquire()
+        try:
+            cache = self._session_caches.pop(session_id, None)
+            if cache is not None:
+                # Explicitly delete tensors to free GPU memory
+                cache.past_key_values = None
+                cache.next_root_logit = None
+                logger.info("Session ended and cache released: %s", session_id)
+                return True
+            logger.debug("Session not found (already ended?): %s", session_id)
+            return False
+        finally:
+            if lock is not None:
+                lock.release()
+            self._session_locks.pop(session_id, None)
 
     @property
     def active_sessions(self) -> int:
         """Number of active sessions with cached KV state."""
         return len(self._session_caches)
 
+    def _ttl_gc_loop(self) -> None:
+        """Background loop that purges stale sessions every 60 seconds."""
+        while True:
+            time.sleep(60)
+            try:
+                self.purge_stale_sessions()
+            except Exception:
+                logger.exception("Error during TTL session purge")
+
+    def purge_stale_sessions(self, ttl_seconds: float | None = None) -> int:
+        """Remove sessions that have not been accessed within the TTL.
+
+        Args:
+            ttl_seconds: Override the configured TTL (for testing).
+
+        Returns:
+            Number of purged sessions.
+        """
+        ttl = ttl_seconds if ttl_seconds is not None else self._session_ttl_seconds
+        now = time.time()
+        stale_ids = [
+            sid for sid, cache in self._session_caches.items()
+            if (now - cache.last_accessed) > ttl
+        ]
+        for sid in stale_ids:
+            cache = self._session_caches.pop(sid, None)
+            self._session_locks.pop(sid, None)
+            if cache is not None:
+                cache.past_key_values = None
+                cache.next_root_logit = None
+        if stale_ids:
+            logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(stale_ids), ttl, stale_ids)
+        return len(stale_ids)
+
     # --------------------------------------------------------------------- #
     # KV Cache rollback
     # --------------------------------------------------------------------- #
 
-    def rollback_cache(self, session_id: str, accepted_depth: int) -> None:
-        """Crop the KV cache back to the longest accepted prefix.
+    def rollback_cache(
+        self,
+        session_id: str,
+        accepted_depth: int,
+        accepted_tree_indices: list[int] | None = None,
+        prefix_length: int = 0,
+    ) -> None:
+        """Compact the KV cache to only the accepted prefix + accepted path.
 
-        After verification, some draft tokens may have been rejected.
-        This method truncates the ``past_key_values`` tensors along the
-        sequence dimension so only the accepted prefix remains, preventing
-        rejected speculative tokens from polluting future forward passes.
+        For **linear chains** (no branching), a simple sequence slice is
+        sufficient.  For **branching trees**, the BFS-flat KV positions
+        contain rejected sibling nodes interspersed with accepted ones.
+        In that case, ``accepted_tree_indices`` specifies exactly which
+        tree positions to keep, and we use ``torch.index_select`` to
+        compact the cache.
 
         Args:
             session_id: The session whose cache to roll back.
-            accepted_depth: The number of tokens in the accepted prefix
+            accepted_depth: Total number of tokens in the accepted prefix
                 (measured from the start of the full cached sequence).
-                The cache will be cropped to exactly this length.
+                Used for simple-slice fallback when ``accepted_tree_indices``
+                is None.
+            accepted_tree_indices: BFS indices (0-based into the tree
+                portion of the input) of the accepted path nodes, in
+                order from root to leaf.  When provided, the cache is
+                compacted to ``prefix[:prefix_length] + tree[accepted_tree_indices]``.
+            prefix_length: Length of the prompt/prefix portion of the
+                cached sequence.  Only used when ``accepted_tree_indices``
+                is provided.
 
         Raises:
             KeyError: If the session does not exist.
@@ -339,38 +426,57 @@ class TargetEngine:
                 f"for session {session_id!r}"
             )
 
-        if accepted_depth == cache.seq_len:
+        if accepted_depth == cache.seq_len and accepted_tree_indices is None:
             logger.debug("Rollback no-op: accepted_depth == seq_len (%d)", accepted_depth)
             return
 
-        # Convert to legacy tuple if needed (DynamicCache, etc.), then crop in place.
-        # Using slice views WITHOUT .contiguous() avoids O(n) reallocation.
-        # The sliced tensors are views into the original buffer — no copy.
-        # HuggingFace attention handles non-contiguous past_key_values correctly.
-        # For a full zero-copy pre-allocated approach, see StaticKVCache in kv_cache.py.
-        rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
         past_kv = _to_legacy_cache(cache.past_key_values)
         if past_kv is None:
             cache.past_key_values = None
             cache.seq_len = 0
             return
-        for layer_key, layer_value in past_kv:
-            rolled_back.append(
-                (
-                    layer_key[:, :, :accepted_depth, :],
-                    layer_value[:, :, :accepted_depth, :],
+
+        if accepted_tree_indices is not None and len(accepted_tree_indices) > 0:
+            # --- Branching tree compaction via index_select ---
+            # Build the full index list: prefix positions + accepted tree positions
+            prefix_indices = list(range(prefix_length))
+            tree_global_indices = [prefix_length + i for i in accepted_tree_indices]
+            keep_indices = prefix_indices + tree_global_indices
+
+            device = past_kv[0][0].device
+            idx_tensor = torch.tensor(keep_indices, dtype=torch.long, device=device)
+
+            rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
+            for layer_key, layer_value in past_kv:
+                # layer_key shape: [batch, heads, seq_len, head_dim]
+                new_key = torch.index_select(layer_key, 2, idx_tensor)
+                new_value = torch.index_select(layer_value, 2, idx_tensor)
+                rolled_back.append((new_key.contiguous(), new_value.contiguous()))
+
+            cache.past_key_values = tuple(rolled_back)
+            new_seq_len = len(keep_indices)
+        else:
+            # --- Simple slice fallback (linear chains, no branching) ---
+            rolled_back = []
+            for layer_key, layer_value in past_kv:
+                rolled_back.append(
+                    (
+                        layer_key[:, :, :accepted_depth, :],
+                        layer_value[:, :, :accepted_depth, :],
+                    )
                 )
-            )
-        cache.past_key_values = tuple(rolled_back)
+            cache.past_key_values = tuple(rolled_back)
+            new_seq_len = accepted_depth
 
         old_len = cache.seq_len
-        cache.seq_len = accepted_depth
+        cache.seq_len = new_seq_len
 
         logger.debug(
-            "KV cache rolled back: session=%s, %d → %d tokens (zero-copy slicing)",
+            "KV cache rolled back: session=%s, %d → %d tokens%s",
             session_id,
             old_len,
-            accepted_depth,
+            new_seq_len,
+            " (index_select compaction)" if accepted_tree_indices else " (simple slice)",
         )
 
     # --------------------------------------------------------------------- #
@@ -474,8 +580,13 @@ class TargetEngine:
                 attn_mask_bool = attn_mask_bool[:, :, -new_len:, :]
                 position_ids = position_ids[:, -new_len:]
 
-            # Convert bool mask → float mask (0.0 / -inf) for HF compatibility
-            attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
+            # D2: Flash Attention 2 is incompatible with 4D custom masks.
+            # When FA2 is active, skip the mask entirely (position_ids still
+            # encode tree structure for positional encoding).
+            if self._use_4d_mask:
+                attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
+            else:
+                attn_mask_float = None
 
             # --- Step 4: Forward pass ---
             with torch.no_grad():
@@ -510,8 +621,10 @@ class TargetEngine:
 
             base = 0 if cache_hit else prefix_length
             for i in range(num_tree_nodes):
-                if i == 0:
-                    # Root: logits that predict the first tree token
+                if topology_map[i] == -1:
+                    # Root node: logits that predict the first tree token.
+                    # Fix A2: ALL roots (not just i==0) must get the prompt's
+                    # last-position logit, not index into all_logits[0, -1, :].
                     if cache_hit and prefix_length > 0 and cache_state.next_root_logit is not None:
                         tree_logits[i] = cache_state.next_root_logit
                     elif prefix_length > 0:
@@ -553,21 +666,37 @@ class TargetEngine:
             num_accepted = result_data.num_accepted
             leaf_idx = result_data.accepted_leaf_index
 
-            # When the full path to a leaf was accepted, verify_greedy_tree returns
-            # bonus = argmax(tree_logits[leaf]) = the leaf token (duplicate). The
-            # correct bonus is the next token after the leaf: argmax at position base+leaf_idx.
+            # Fix A3: When the full path to a leaf was accepted, the bonus token
+            # from both greedy and stochastic verification is sampled from
+            # tree_logits[leaf], which predicts the LEAF token itself (duplicate).
+            # The correct bonus is the NEXT token after the leaf:
+            #   greedy  → argmax(all_logits[base + leaf])
+            #   stochastic → multinomial(softmax(all_logits[base + leaf] / T))
             if (
                 num_accepted > 0
                 and leaf_idx >= 0
                 and result_data.bonus_token == accepted_ids[-1]
             ):
-                correction = all_logits[0, base + leaf_idx, :].argmax(dim=-1).item()
+                next_logits = all_logits[0, base + leaf_idx, :]
+                if temperature > 0.0:
+                    next_probs = torch.softmax(next_logits / temperature, dim=-1)
+                    correction = torch.multinomial(next_probs, 1).item()
+                else:
+                    correction = next_logits.argmax(dim=-1).item()
 
             # --- Step 8: Rollback cache to accepted prefix and update logic states ---
             if session_id is not None and cache_state is not None:
                 accepted_total = prefix_length + num_accepted
+                # Fix A1: Extract accepted_indices from verification result
+                # for proper KV cache compaction on branching trees.
+                accepted_tree_indices = getattr(result_data, 'accepted_indices', None)
                 if accepted_total <= cache_state.seq_len:
-                    self.rollback_cache(session_id, accepted_total)
+                    self.rollback_cache(
+                        session_id,
+                        accepted_total,
+                        accepted_tree_indices=accepted_tree_indices,
+                        prefix_length=prefix_length,
+                    )
 
                 if correction is not None and correction >= 0:
                     correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)

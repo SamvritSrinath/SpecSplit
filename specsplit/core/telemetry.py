@@ -11,6 +11,7 @@ import json
 import logging
 import time
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -124,9 +125,12 @@ class TelemetryLogger:
         tlog.export("telemetry_output.json")
     """
 
-    def __init__(self, service_name: str = "specsplit") -> None:
+    def __init__(self, service_name: str = "specsplit", max_spans: int = 10_000) -> None:
         self.service_name = service_name
-        self._spans: list[TelemetrySpan] = []
+        self._max_spans = max_spans
+        # Fix D1: Use a bounded deque to prevent unbounded memory growth
+        # in long-running gRPC worker processes.
+        self._spans: deque[TelemetrySpan] = deque(maxlen=max_spans)
 
     def span(self, operation: str, **metadata: Any) -> _SpanContext:
         """Create a timed span context manager.
@@ -174,7 +178,7 @@ class TelemetryLogger:
 
     def reset(self) -> None:
         """Clear all recorded spans."""
-        self._spans.clear()
+        self._spans = deque(maxlen=self._max_spans)
 
 
 class _SpanContext:

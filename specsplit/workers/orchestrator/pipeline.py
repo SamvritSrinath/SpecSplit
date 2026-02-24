@@ -45,6 +45,8 @@ from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
+import grpc
+
 from specsplit.core.config import OrchestratorConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2
@@ -215,17 +217,17 @@ def _get_longest_path(draft: DraftTree) -> list[int]:
     children: dict[int, list[int]] = {}
     for i, p in enumerate(draft.topology_map):
         children.setdefault(p, []).append(i)
-    
+
     best_path: list[int] = []
     stack = [(r, [draft.token_ids[r]]) for r in children.get(-1, [])]
-    
+
     while stack:
         node, path = stack.pop()
         if len(path) > len(best_path):
             best_path = path
         for c in children.get(node, []):
             stack.append((c, path + [draft.token_ids[c]]))
-            
+
     return best_path
 
 
@@ -241,6 +243,7 @@ async def _call_generate_drafts(
     config: OrchestratorConfig,
     round_idx: int,
     reset_cache: bool = False,
+    session_id: str | None = None,
 ) -> _RpcResult[DraftTree]:
     """Call ``DraftService.GenerateDrafts`` over gRPC.
 
@@ -255,14 +258,19 @@ async def _call_generate_drafts(
         round_idx: Current round index (for tracing).
         reset_cache: If True, instruct the draft engine to clear its
             KV cache before generating (e.g. after speculation miss).
+        session_id: Session ID for per-session KV cache isolation
+            on the Draft Worker.
 
     Returns:
         An :class:`_RpcResult` wrapping a :class:`DraftTree` and the RPC
         wall-clock elapsed time in milliseconds.
+
+    Raises:
+        grpc.aio.AioRpcError: Re-raised for non-timeout gRPC errors.
     """
     # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
-    
+
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
@@ -274,11 +282,11 @@ async def _call_generate_drafts(
         prompt_token_ids=context_ids,
         max_draft_len=config.max_draft_tokens,
         reset_cache=reset_cache,
-        # Forward Orchestrator's config (issue 28/32 related, though note: OrchestratorConfig 
-        # doesn't currently have a native num_beams config, but if it did it would go here)
+        session_id=session_id or "",
     )
 
-    response = draft_stub.GenerateDrafts(request)
+    # Issue 9: Pass timeout to prevent indefinite hangs
+    response = draft_stub.GenerateDrafts(request, timeout=config.timeout_s)
     # Support both sync and async stubs
     if asyncio.iscoroutine(response) or asyncio.isfuture(response):
         response = await response
@@ -310,6 +318,7 @@ async def _call_verify_drafts(
     draft_tree: DraftTree,
     session_id: str | None,
     config: OrchestratorConfig,
+    new_token_ids: list[int] | None = None,
 ) -> _RpcResult[VerificationResult]:
     """Call ``TargetService.VerifyDrafts`` over gRPC.
 
@@ -322,18 +331,23 @@ async def _call_verify_drafts(
         draft_tree: The draft tree to verify (with preserved proto nodes).
         session_id: Session ID for KV cache reuse, or None for stateless.
         config: Pipeline configuration.
+        new_token_ids: Delta tokens since last verified position (Issue 11).
+            When provided, sent instead of full context to reduce bandwidth.
 
     Returns:
         An :class:`_RpcResult` wrapping a :class:`VerificationResult` and
         the RPC wall-clock elapsed time in milliseconds.
+
+    Raises:
+        grpc.aio.AioRpcError: Re-raised for non-timeout gRPC errors.
     """
     # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
-    
+
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
-        
+
     rpc_sw.start()
 
     request = spec_decoding_pb2.VerifyRequest(
@@ -342,9 +356,11 @@ async def _call_verify_drafts(
         draft_tree=draft_tree.proto_nodes,
         session_id=session_id or "",
         temperature=config.verify_temperature,
+        new_token_ids=new_token_ids or [],
     )
 
-    response = target_stub.VerifyDrafts(request)
+    # Issue 9: Pass timeout to prevent indefinite hangs
+    response = target_stub.VerifyDrafts(request, timeout=config.timeout_s)
     # Support both sync and async stubs
     if asyncio.iscoroutine(response) or asyncio.isfuture(response):
         response = await response
@@ -352,7 +368,7 @@ async def _call_verify_drafts(
     rpc_sw.stop()
 
     accepted_tokens = list(response.accepted_token_ids)
-    
+
     # Issue 39/40: Use has_correction proto field to correctly distinguish
     # between "no correction" and "correction token is 0".
     # proto3 defaults correction_token_id to 0 when unset, so we cannot
@@ -476,14 +492,28 @@ async def run_speculative_loop_async(
     speculative_draft: DraftTree | None = None
     speculative_assumption: list[int] = []  # What we assumed N would accept
 
+    # Issue 11: Track the verified context length for delta-only transmission
+    verified_context_len: int = 0
+
     with telemetry.span("initial_draft", round_idx=0):
-        initial_rpc = await _call_generate_drafts(
-            draft_stub,
-            prompt_ids,
-            current_context,
-            cfg,
-            round_idx=0,
-        )
+        try:
+            initial_rpc = await _call_generate_drafts(
+                draft_stub,
+                prompt_ids,
+                current_context,
+                cfg,
+                round_idx=0,
+                session_id=session_id,
+            )
+        except grpc.aio.AioRpcError as e:
+            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                logger.warning("Initial draft RPC timed out (timeout=%.1fs)", cfg.timeout_s)
+                pipeline_sw.stop()
+                return PipelineResult(
+                    output_tokens=[], total_rounds=0, acceptance_rate=0.0,
+                    speculation_hit_rate=0.0, wall_time_ms=pipeline_sw.elapsed_ms,
+                )
+            raise
         current_draft = initial_rpc.value
         state.total_rpc_time_ms += initial_rpc.elapsed_ms
 
@@ -502,6 +532,18 @@ async def run_speculative_loop_async(
             state.is_finished = True
             break
 
+        # Issue 8: Context window guardrail — prevent CUDA/HF crash
+        if len(current_context) + cfg.max_draft_tokens >= cfg.max_context_window:
+            logger.warning(
+                "Context window limit reached: current=%d + draft=%d >= max=%d. "
+                "Terminating generation to prevent model crash.",
+                len(current_context),
+                cfg.max_draft_tokens,
+                cfg.max_context_window,
+            )
+            state.is_finished = True
+            break
+
         if current_draft is None:
             logger.warning("No draft tree available at round %d, stopping", round_idx)
             break
@@ -509,11 +551,17 @@ async def run_speculative_loop_async(
         # --------------------------------------------------------------
         # Step A: Launch Verify(N) and speculative Draft(N+1) concurrently
         # --------------------------------------------------------------
-        # Extract the longest path to form our speculation assumption, 
+        # Extract the longest path to form our speculation assumption,
         # avoiding sending a flat multi-branch tree to the draft context.
         assumed_path = _get_longest_path(current_draft)
         speculative_context = current_context + assumed_path
         speculative_assumption = assumed_path
+
+        # Issue 11: Compute delta tokens for bandwidth optimization
+        if verified_context_len > 0 and session_id:
+            delta_token_ids = current_context[verified_context_len:]
+        else:
+            delta_token_ids = None
 
         # Create concurrent tasks
         verify_task = asyncio.create_task(
@@ -523,6 +571,7 @@ async def run_speculative_loop_async(
                 current_draft,
                 session_id,
                 cfg,
+                new_token_ids=delta_token_ids,
             )
         )
 
@@ -534,30 +583,44 @@ async def run_speculative_loop_async(
                 speculative_context,
                 cfg,
                 round_idx=round_idx + 1,
+                session_id=session_id,
             )
         )
 
         # Wait for BOTH to complete (they run concurrently)
+        # Issue 9: Catch DEADLINE_EXCEEDED from either RPC
         with telemetry.span(
             "overlapped_round",
             round_idx=round_idx,
             draft_tokens=len(current_draft.token_ids),
         ):
-            verify_rpc_result, speculative_draft_rpc_result = await asyncio.gather(
-                verify_task,
-                speculative_draft_task,
-            )
+            try:
+                verify_rpc_result, speculative_draft_rpc_result = await asyncio.gather(
+                    verify_task,
+                    speculative_draft_task,
+                )
+            except grpc.aio.AioRpcError as e:
+                if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                    logger.warning(
+                        "RPC timed out at round %d (timeout=%.1fs). "
+                        "Terminating pipeline gracefully.",
+                        round_idx,
+                        cfg.timeout_s,
+                    )
+                    state.is_finished = True
+                    break
+                raise
 
         # Unwrap _RpcResult and accumulate RPC times
         verify_result = verify_rpc_result.value
         speculative_draft = speculative_draft_rpc_result.value
-        
+
         # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum
         state.total_rpc_time_ms += max(
             verify_rpc_result.elapsed_ms,
             speculative_draft_rpc_result.elapsed_ms
         )
-        
+
         # Also add simulated RTT back into network_idle_ms if we are modelling overlapping
         if cfg.simulated_rtt_ms > 0:
             state.total_rpc_time_ms += cfg.simulated_rtt_ms
@@ -603,6 +666,8 @@ async def run_speculative_loop_async(
         state.generated_tokens.extend(new_tokens)
         # Context for next round is only verified output (never speculative draft).
         current_context = list(prompt_ids) + state.generated_tokens
+        # Issue 11: Update verified_context_len for delta-only transmission
+        verified_context_len = len(current_context)
 
         logger.info(
             "Round %d: accepted %d/%d (path_depth=%d, tree_nodes=%d), bonus=%s, total_output=%d",
@@ -645,24 +710,64 @@ async def run_speculative_loop_async(
         path_matches = actual_accepted == list(speculative_assumption)
 
         bonus_matches = False
+        matched_root_idx = None
         if path_matches and speculative_draft is not None and speculative_draft.token_ids:
-            # Find the first root of the speculative draft tree
-            first_root_idx = next(
-                (i for i, p in enumerate(speculative_draft.topology_map) if p == -1),
-                None,
-            )
-            if first_root_idx is not None:
-                bonus_matches = (
-                    verify_result.bonus_token == speculative_draft.token_ids[first_root_idx]
-                )
+            # Fix B1: Check ALL root nodes, not just the first one.
+            # The target model might have picked any of the root branches.
+            root_indices = [
+                i for i, p in enumerate(speculative_draft.topology_map) if p == -1
+            ]
+            for root_idx in root_indices:
+                if verify_result.bonus_token == speculative_draft.token_ids[root_idx]:
+                    bonus_matches = True
+                    matched_root_idx = root_idx
+                    break
 
         speculation_correct = path_matches and bonus_matches
 
         if speculation_correct:
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
             state.speculation_hits += 1
-            current_draft = speculative_draft
-            logger.info("Speculation HIT at round %d — reusing draft N+1", round_idx)
+
+            # If a non-primary root matched, prune the draft tree to only
+            # the matched root's subtree (its descendants).
+            if matched_root_idx is not None and matched_root_idx > 0:
+                # Find all descendants of the matched root
+                old_ids = speculative_draft.token_ids
+                old_topo = speculative_draft.topology_map
+                # BFS from matched root to collect the subtree
+                keep = set()
+                queue_prune = [matched_root_idx]
+                while queue_prune:
+                    node = queue_prune.pop(0)
+                    keep.add(node)
+                    for j, parent in enumerate(old_topo):
+                        if parent == node and j not in keep:
+                            queue_prune.append(j)
+                sorted_keep = sorted(keep)
+                # Remap indices to contiguous [0, 1, 2, ...]
+                old_to_new = {old: new for new, old in enumerate(sorted_keep)}
+                new_ids = [old_ids[i] for i in sorted_keep]
+                new_topo = [
+                    -1 if old_topo[i] == -1 or i == matched_root_idx
+                    else old_to_new.get(old_topo[i], -1)
+                    for i in sorted_keep
+                ]
+                current_draft = DraftTree(
+                    token_ids=new_ids,
+                    topology_map=new_topo,
+                    proto_nodes=speculative_draft.proto_nodes,
+                    round_idx=speculative_draft.round_idx,
+                )
+                logger.info(
+                    "Speculation HIT at round %d — reusing draft N+1 "
+                    "(pruned to root %d, %d→%d nodes)",
+                    round_idx, matched_root_idx,
+                    len(old_ids), len(new_ids),
+                )
+            else:
+                current_draft = speculative_draft
+                logger.info("Speculation HIT at round %d — reusing draft N+1", round_idx)
         else:
             # ❌ Speculation miss.  The speculative draft was computed
             # from an incorrect context.  Discard it and re-draft.
@@ -682,14 +787,25 @@ async def run_speculative_loop_async(
             # Re-draft from the CORRECTED context, with reset_cache=True
             # to invalidate the draft engine's stale cross-round KV cache.
             with telemetry.span("re_draft", round_idx=round_idx):
-                re_draft_rpc = await _call_generate_drafts(
-                    draft_stub,
-                    prompt_ids,
-                    current_context,
-                    cfg,
-                    round_idx=round_idx + 1,
-                    reset_cache=True,
-                )
+                try:
+                    re_draft_rpc = await _call_generate_drafts(
+                        draft_stub,
+                        prompt_ids,
+                        current_context,
+                        cfg,
+                        round_idx=round_idx + 1,
+                        reset_cache=True,
+                        session_id=session_id,
+                    )
+                except grpc.aio.AioRpcError as e:
+                    if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                        logger.warning(
+                            "Re-draft RPC timed out at round %d. Terminating.",
+                            round_idx,
+                        )
+                        state.is_finished = True
+                        break
+                    raise
                 current_draft = re_draft_rpc.value
                 state.total_rpc_time_ms += re_draft_rpc.elapsed_ms
             speculative_draft = None

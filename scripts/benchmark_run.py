@@ -190,7 +190,7 @@ class BenchmarkOrchestrator:
         tpot_ms = result.wall_time_ms / max(generated_tokens, 1)
 
         per_round_acc_str = ";".join(
-            f"{r['round']}:{r['acceptance_rate']:.2f}" 
+            f"{r['round']}:{r['acceptance_rate']:.2f}"
             for r in result.per_round_acceptance
         )
 
@@ -430,7 +430,7 @@ def main() -> None:
             metrics.request_id = req_id
             all_metrics.append(metrics)
             all_telemetry.extend(req_telemetry)
-            
+
             # Issue 31: Prevent infinite telemetry accumulation in memory
             bench_orch._orch._telemetry.reset()
 
@@ -453,7 +453,7 @@ def main() -> None:
         with open(args.telemetry_output, "w") as f:
             json.dump(all_telemetry, f, indent=2)
         logger.info("Telemetry exported → %s", args.telemetry_output)
-        
+
     # ---- Summary ----
     print_summary(all_metrics)
     print(f"Full per-request CSV: {args.output}")
