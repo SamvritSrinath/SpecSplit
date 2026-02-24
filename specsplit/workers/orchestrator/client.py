@@ -92,7 +92,7 @@ class Orchestrator:
 
         logger.info("gRPC channels established")
 
-    def run(self, prompt: str) -> str:
+    def run_with_result(self, prompt: str) -> tuple[str, PipelineResult]:
         """Run the full speculative decoding pipeline for a given prompt.
 
         Tokenizes the prompt, executes the async speculative loop over
@@ -102,7 +102,7 @@ class Orchestrator:
             prompt: The user's input text prompt.
 
         Returns:
-            The generated output text.
+            A tuple of (generated output text, PipelineResult with full metrics).
         """
         logger.info("Starting generation for prompt: %r", prompt[:80])
 
@@ -134,6 +134,21 @@ class Orchestrator:
                 result.wall_time_ms,
             )
 
+        return output_text, result
+
+    def run(self, prompt: str) -> str:
+        """Run the pipeline and return the generated text.
+
+        Thin wrapper around :meth:`run_with_result` for callers that only
+        need the output string.
+
+        Args:
+            prompt: The user's input text prompt.
+
+        Returns:
+            The generated output text.
+        """
+        output_text, _ = self.run_with_result(prompt)
         return output_text
 
     def export_telemetry(self, path: str) -> None:
