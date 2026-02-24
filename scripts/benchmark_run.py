@@ -29,6 +29,7 @@ Dataset format — one JSON object per line, at minimum a ``"prompt"`` field::
 from __future__ import annotations
 
 import argparse
+import asyncio
 import csv
 import json
 import logging
@@ -56,6 +57,7 @@ CSV_COLUMNS = [
     "ttft_ms",
     "tpot_ms",
     "average_acceptance_rate",
+    "per_round_acceptance",
     "total_network_idle_ms",
     "total_latency_ms",
     "num_rounds",
@@ -90,6 +92,7 @@ class RequestMetrics:
     ttft_ms: float = 0.0
     tpot_ms: float = 0.0
     average_acceptance_rate: float = 0.0
+    per_round_acceptance: str = ""
     total_network_idle_ms: float = 0.0
     total_latency_ms: float = 0.0
     num_rounds: int = 0
@@ -167,7 +170,7 @@ class BenchmarkOrchestrator:
             prompt: Input text prompt.
 
         Returns:
-            A populated ``RequestMetrics`` instance with real measurements.
+            A tuple of populated ``RequestMetrics`` instance and the raw telemetry span list.
         """
         request_id = uuid.uuid4().hex[:12]
 
@@ -186,7 +189,12 @@ class BenchmarkOrchestrator:
         ttft_ms = _ttft_from_telemetry(result.telemetry)
         tpot_ms = result.wall_time_ms / max(generated_tokens, 1)
 
-        return RequestMetrics(
+        per_round_acc_str = ";".join(
+            f"{r['round']}:{r['acceptance_rate']:.2f}" 
+            for r in result.per_round_acceptance
+        )
+
+        metrics = RequestMetrics(
             request_id=request_id,
             gamma=self.gamma,
             prompt_length=real_prompt_tokens,
@@ -194,10 +202,12 @@ class BenchmarkOrchestrator:
             ttft_ms=round(ttft_ms, 3),
             tpot_ms=round(tpot_ms, 3),
             average_acceptance_rate=round(result.acceptance_rate, 4),
+            per_round_acceptance=per_round_acc_str,
             total_network_idle_ms=round(result.network_idle_ms, 3),
             total_latency_ms=round(result.wall_time_ms, 3),
             num_rounds=result.total_rounds,
         )
+        return metrics, result.telemetry
 
 
 # =========================================================================
@@ -395,6 +405,7 @@ def main() -> None:
 
     # ---- Sweep over gamma values ----
     all_metrics: list[RequestMetrics] = []
+    all_telemetry: list[dict] = []
 
     for gamma in sorted(args.gamma):
         logger.info("=== Starting sweep: gamma=%d (%d prompts) ===", gamma, len(dataset))
@@ -415,21 +426,34 @@ def main() -> None:
                 prompt[:60],
             )
 
-            metrics = bench_orch.run_and_measure(prompt)
+            metrics, req_telemetry = bench_orch.run_and_measure(prompt)
             metrics.request_id = req_id
             all_metrics.append(metrics)
+            all_telemetry.extend(req_telemetry)
+            
+            # Issue 31: Prevent infinite telemetry accumulation in memory
+            bench_orch._orch._telemetry.reset()
 
         logger.info("=== Completed sweep: gamma=%d ===", gamma)
+
+        # Issue 41: Close gRPC channels to prevent resource leaks
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        loop.run_until_complete(bench_orch._orch.close())
 
     # ---- Write results ----
     write_csv(all_metrics, args.output)
 
     # ---- Telemetry export (optional) ----
     if args.telemetry_output:
-        # Export telemetry from the last orchestrator instance
-        bench_orch._orch.export_telemetry(args.telemetry_output)
+        # Export the per-round accumulated pipeline spans (Issue 24)
+        with open(args.telemetry_output, "w") as f:
+            json.dump(all_telemetry, f, indent=2)
         logger.info("Telemetry exported → %s", args.telemetry_output)
-
+        
     # ---- Summary ----
     print_summary(all_metrics)
     print(f"Full per-request CSV: {args.output}")

@@ -358,7 +358,7 @@ def verify_stochastic_tree(
             accepted = torch.rand(1).item() < (p_val / q_val)
 
         if not accepted:
-            if len(path) > len(best_path):
+            if len(path) >= len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
             elif best_divergence_node < 0:

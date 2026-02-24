@@ -28,6 +28,14 @@ Tensor Layout
 
 The ``seq_len`` pointer tracks how many valid positions are stored.
 Only ``[:, :, :, :seq_len, :]`` contains meaningful data.
+
+.. note::
+
+    This module is **not yet wired** into :class:`TargetEngine`, which
+    currently uses HuggingFace's standard ``past_key_values`` tuple
+    with slice-based rollback.  ``StaticKVCache`` is prepared as a
+    future performance optimization to eliminate ``torch.cat``
+    reallocation overhead in the verification hot path.
 """
 
 from __future__ import annotations

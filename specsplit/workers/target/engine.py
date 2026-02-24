@@ -51,13 +51,19 @@ class VerificationResult:
     accepted_token_ids: list[int]
     correction_token_id: int | None
     num_accepted: int
+    num_draft_tokens: int = 0
     cache_hit: bool = False
 
     @property
     def acceptance_rate(self) -> float:
-        """Fraction of draft tokens accepted (0.0-1.0)."""
-        total = self.num_accepted + (1 if self.correction_token_id is not None else 0)
-        return self.num_accepted / total if total > 0 else 0.0
+        """Fraction of draft tokens accepted (0.0-1.0).
+
+        Uses ``num_draft_tokens`` (the total draft candidates presented)
+        as the denominator for a meaningful acceptance rate.
+        """
+        if self.num_draft_tokens > 0:
+            return self.num_accepted / self.num_draft_tokens
+        return 0.0
 
 
 @dataclass
@@ -425,6 +431,7 @@ class TargetEngine:
                     accepted_token_ids=[],
                     correction_token_id=None,
                     num_accepted=0,
+                    num_draft_tokens=0,
                     cache_hit=cache_hit,
                 )
 
@@ -588,6 +595,7 @@ class TargetEngine:
                 accepted_token_ids=accepted_ids,
                 correction_token_id=correction,
                 num_accepted=num_accepted,
+                num_draft_tokens=num_tree_nodes,
                 cache_hit=cache_hit,
             )
         finally:

@@ -94,6 +94,17 @@ class Orchestrator:
 
         logger.info("Async gRPC channels established")
 
+    async def close(self) -> None:
+        """Close gRPC channels and release resources."""
+        if self._draft_channel is not None:
+            await self._draft_channel.close()
+            self._draft_channel = None
+        if self._target_channel is not None:
+            await self._target_channel.close()
+            self._target_channel = None
+            
+        logger.info("Async gRPC channels closed")
+
     async def run_with_result(self, prompt: str) -> tuple[str, PipelineResult]:
         """Run the full speculative decoding pipeline for a given prompt.
 
@@ -144,13 +155,26 @@ class Orchestrator:
         Creates a new event loop and runs the async method to completion.
         Use this from non-async callers (CLI, benchmarks, etc.).
 
+        Use this from non-async callers (CLI, benchmarks, etc.).
+        Note that establishing a single event loop per orchestrator prevents
+        leaking and crashing gRPC components tied to differing loop lifetimes.
+
         Args:
             prompt: The user's input text prompt.
 
         Returns:
             A tuple of (generated output text, PipelineResult with full metrics).
         """
-        return asyncio.run(self.run_with_result(prompt))
+        # Because we bind to a specific loop in connect() depending on when it's called,
+        # calling asyncio.run() repeatedly creates new loops which crashes aio channels.
+        # So we should get the current loop or make one and run until complete.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            
+        return loop.run_until_complete(self.run_with_result(prompt))
 
     def run(self, prompt: str) -> str:
         """Run the pipeline and return the generated text.
@@ -232,7 +256,9 @@ def main() -> None:
         file_cfg = all_sections.get("orchestrator", {})
 
     # CLI args override file config; env vars override both (pydantic-settings)
-    config_kw: dict = {**file_cfg, "use_target_kv_cache": args.use_target_cache}
+    config_kw: dict = {**file_cfg}
+    if args.use_target_cache:
+        config_kw["use_target_kv_cache"] = True
     if args.max_rounds is not None:
         config_kw["max_rounds"] = args.max_rounds
     if args.max_output_tokens is not None:

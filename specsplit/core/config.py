@@ -169,7 +169,7 @@ class OrchestratorConfig(BaseSettings):
         default=False,
         description="If False (naive mode), target verifies statelessly each round — no session KV cache, no flush. Use for testing that orchestrator/draft/target communication works.",
     )
-    temperature: float = Field(
+    verify_temperature: float = Field(
         default=0.0,
         ge=0.0,
         description="Sampling temperature for verification. 0.0 = greedy, >0.0 = stochastic rejection sampling.",

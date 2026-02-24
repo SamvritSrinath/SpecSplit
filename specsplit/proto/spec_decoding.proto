@@ -92,6 +92,7 @@ message VerifyResponse {
   string  request_id        = 1;  // Echo of the request identifier.
   repeated int32 accepted_token_ids = 2;  // Longest accepted prefix from the tree.
   int32   correction_token_id = 3;  // Correction token sampled from target (if draft rejected).
+  bool    has_correction      = 8;  // True if correction_token_id is valid (avoids token 0 conflation).
   int32   num_accepted       = 4;  // Number of draft tokens accepted.
   TelemetryMetadata telemetry = 5;  // Server-side timing information.
   string  session_id        = 6;  // Echo of session ID (confirms cache association).

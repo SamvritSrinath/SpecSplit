@@ -205,7 +205,12 @@ class DraftEngine:
                 # Expand each selected branch
                 for i in range(branching_factor):
                     token_id_int = top_indices[0, i].item()
-                    log_prob = math.log(top_probs[0, i].item() + 1e-10)
+                    
+                    # Issue 27: Store true log(p) without epsilon. Epsilon is added implicitly during
+                    # exp() reconstruction, so we don't want p + 2e-10
+                    # Clip strictly at 1e-10 to avoid log(0)
+                    prob_val = max(top_probs[0, i].item(), 1e-10)
+                    log_prob = math.log(prob_val)
                     
                     child_node = TokenNode(token_id=token_id_int, log_prob=log_prob)
                     
@@ -214,11 +219,25 @@ class DraftEngine:
                     else:
                         parent_node.children.append(child_node)
                         
+                    # Issue 18: Clone the KV cache if we're branching, otherwise Siblings
+                    # will contaminate each other's cache since HuggingFace mutating it in-place
+                    # (only needed if branching_factor > 1 and this isn't the last branch)
+                    is_last_branch = (i == branching_factor - 1)
+                    branch_past_kv = past_kv
+                    if not is_last_branch and past_kv is not None:
+                        # Deep copy the legacy tuple structure OR use dynamic cache clone
+                        if hasattr(past_kv, "clone"):
+                            branch_past_kv = past_kv.clone()
+                        elif isinstance(past_kv, tuple):
+                            branch_past_kv = tuple(
+                                tuple(t.clone() for t in layer) for layer in past_kv
+                            )
+
                     # Compute the forward pass for this specific branch
                     next_input = torch.tensor([[token_id_int]], dtype=torch.long, device=self.device)
                     step_out = self._model(
                         input_ids=next_input,
-                        past_key_values=past_kv,
+                        past_key_values=branch_past_kv,
                         use_cache=True,
                     )
                     

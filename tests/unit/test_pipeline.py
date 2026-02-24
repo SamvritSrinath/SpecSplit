@@ -14,6 +14,7 @@ from specsplit.proto import spec_decoding_pb2
 from specsplit.workers.orchestrator.pipeline import (
     DraftTree,
     PipelineResult,
+    _flatten_proto_tree,
     _get_longest_path,
     run_speculative_loop_async,
 )
@@ -77,6 +78,62 @@ class TestGetLongestPath:
         assert path[1] in (10, 20)
 
 
+class TestFlattenProtoTree:
+    """Tests for _flatten_proto_tree — must match target engine's BFS ordering."""
+
+    def test_linear_chain(self) -> None:
+        """Linear chain should have identical BFS and DFS ordering."""
+        leaf = spec_decoding_pb2.TokenNode(token_id=30, log_prob=-0.3)
+        mid = spec_decoding_pb2.TokenNode(token_id=20, log_prob=-0.2)
+        mid.children.append(leaf)
+        root = spec_decoding_pb2.TokenNode(token_id=10, log_prob=-0.1)
+        root.children.append(mid)
+
+        token_ids, topology = _flatten_proto_tree([root])
+        assert token_ids == [10, 20, 30]
+        assert topology == [-1, 0, 1]
+
+    def test_branching_tree_bfs_order(self) -> None:
+        """Branching tree should be flattened in BFS (level) order.
+
+        Tree:      10
+                  /    \\
+                20      30
+                |       |
+                40      50
+
+        BFS order: [10, 20, 30, 40, 50]
+        DFS order: [10, 20, 40, 30, 50]  ← this would be WRONG
+        """
+        child40 = spec_decoding_pb2.TokenNode(token_id=40, log_prob=-0.4)
+        child50 = spec_decoding_pb2.TokenNode(token_id=50, log_prob=-0.5)
+        branch20 = spec_decoding_pb2.TokenNode(token_id=20, log_prob=-0.2)
+        branch20.children.append(child40)
+        branch30 = spec_decoding_pb2.TokenNode(token_id=30, log_prob=-0.3)
+        branch30.children.append(child50)
+        root = spec_decoding_pb2.TokenNode(token_id=10, log_prob=-0.1)
+        root.children.append(branch20)
+        root.children.append(branch30)
+
+        token_ids, topology = _flatten_proto_tree([root])
+
+        # BFS ordering: root=0, left_child=1, right_child=2, left_grandchild=3, right_grandchild=4
+        assert token_ids == [10, 20, 30, 40, 50]
+        assert topology == [-1, 0, 0, 1, 2]
+
+    def test_multiple_roots_bfs(self) -> None:
+        """Multiple roots should each have parent -1, flattened in BFS order."""
+        root1 = spec_decoding_pb2.TokenNode(token_id=1, log_prob=-0.1)
+        root2 = spec_decoding_pb2.TokenNode(token_id=2, log_prob=-0.2)
+        child = spec_decoding_pb2.TokenNode(token_id=3, log_prob=-0.3)
+        root1.children.append(child)
+
+        token_ids, topology = _flatten_proto_tree([root1, root2])
+        # BFS: root1(1) → root2(2) → child-of-root1(3)
+        assert token_ids == [1, 2, 3]
+        assert topology == [-1, -1, 0]
+
+
 # ============================================================================
 # Helpers for mock stubs
 # ============================================================================
@@ -110,6 +167,7 @@ def _make_verify_response(
     accepted_ids: list[int],
     correction: int,
     num_accepted: int | None = None,
+    has_correction: bool = True,
     cache_hit: bool = False,
     request_id: str = "test",
 ) -> spec_decoding_pb2.VerifyResponse:
@@ -118,6 +176,7 @@ def _make_verify_response(
         request_id=request_id,
         accepted_token_ids=accepted_ids,
         correction_token_id=correction,
+        has_correction=has_correction,
         num_accepted=num_accepted if num_accepted is not None else len(accepted_ids),
         cache_hit=cache_hit,
     )

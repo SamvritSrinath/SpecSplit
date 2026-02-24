@@ -41,6 +41,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import uuid
+from collections import deque
 from dataclasses import dataclass, field
 from typing import Any, Generic, TypeVar
 
@@ -97,8 +98,8 @@ class VerificationResult:
     """
 
     accepted_tokens: list[int]
-    bonus_token: int
     accepted_length: int
+    bonus_token: int | None = None
     cache_hit: bool = False
     round_idx: int = 0
 
@@ -187,15 +188,20 @@ def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
     token_ids: list[int] = []
     topology_map: list[int] = []
 
-    def _walk(node: Any, parent_idx: int) -> None:
+    # Use BFS (deque) to match the target engine's _flatten_tree ordering.
+    # Both sides MUST use the same traversal order so that node indices align
+    # for branching trees (DFS and BFS diverge when num_beams > 1).
+    queue: deque[tuple[Any, int]] = deque()
+    for root in proto_nodes:
+        queue.append((root, -1))
+
+    while queue:
+        node, parent_idx = queue.popleft()
         my_idx = len(token_ids)
         token_ids.append(node.token_id)
         topology_map.append(parent_idx)
         for child in node.children:
-            _walk(child, my_idx)
-
-    for root in proto_nodes:
-        _walk(root, -1)
+            queue.append((child, my_idx))
 
     return token_ids, topology_map
 
@@ -254,18 +260,22 @@ async def _call_generate_drafts(
         An :class:`_RpcResult` wrapping a :class:`DraftTree` and the RPC
         wall-clock elapsed time in milliseconds.
     """
+    # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
-    rpc_sw.start()
-
+    
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
+
+    rpc_sw.start()
 
     request = spec_decoding_pb2.DraftRequest(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
         max_draft_len=config.max_draft_tokens,
         reset_cache=reset_cache,
+        # Forward Orchestrator's config (issue 28/32 related, though note: OrchestratorConfig 
+        # doesn't currently have a native num_beams config, but if it did it would go here)
     )
 
     response = draft_stub.GenerateDrafts(request)
@@ -317,19 +327,21 @@ async def _call_verify_drafts(
         An :class:`_RpcResult` wrapping a :class:`VerificationResult` and
         the RPC wall-clock elapsed time in milliseconds.
     """
+    # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
-    rpc_sw.start()
-
+    
     # Inject Synthetic RTT Latency (Task 4.1)
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
         
+    rpc_sw.start()
+
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
         draft_tree=draft_tree.proto_nodes,
         session_id=session_id or "",
-        temperature=config.temperature,
+        temperature=config.verify_temperature,
     )
 
     response = target_stub.VerifyDrafts(request)
@@ -340,19 +352,24 @@ async def _call_verify_drafts(
     rpc_sw.stop()
 
     accepted_tokens = list(response.accepted_token_ids)
-    correction = response.correction_token_id if response.correction_token_id != 0 else None
+    
+    # Issue 39/40: Use has_correction proto field to correctly distinguish
+    # between "no correction" and "correction token is 0".
+    # proto3 defaults correction_token_id to 0 when unset, so we cannot
+    # rely on the value alone.
+    bonus = response.correction_token_id if response.has_correction else None
 
     logger.debug(
         "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s, rpc_ms=%.2f",
         draft_tree.round_idx,
         response.num_accepted,
         len(draft_tree.token_ids),
-        correction,
+        bonus,
         rpc_sw.elapsed_ms,
     )
     vr = VerificationResult(
         accepted_tokens=accepted_tokens,
-        bonus_token=response.correction_token_id,
+        bonus_token=bonus,
         accepted_length=response.num_accepted,
         cache_hit=response.cache_hit,
         round_idx=draft_tree.round_idx,
@@ -534,8 +551,16 @@ async def run_speculative_loop_async(
         # Unwrap _RpcResult and accumulate RPC times
         verify_result = verify_rpc_result.value
         speculative_draft = speculative_draft_rpc_result.value
-        state.total_rpc_time_ms += verify_rpc_result.elapsed_ms
-        state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
+        
+        # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum
+        state.total_rpc_time_ms += max(
+            verify_rpc_result.elapsed_ms,
+            speculative_draft_rpc_result.elapsed_ms
+        )
+        
+        # Also add simulated RTT back into network_idle_ms if we are modelling overlapping
+        if cfg.simulated_rtt_ms > 0:
+            state.total_rpc_time_ms += cfg.simulated_rtt_ms
 
         # --------------------------------------------------------------
         # Step B: Process verification result
@@ -563,18 +588,16 @@ async def run_speculative_loop_async(
 
         # Append accepted tokens and bonus token to output
         new_tokens = list(verify_result.accepted_tokens)
-        if verify_result.bonus_token is not None and verify_result.bonus_token != 0:
+        # Safely check for None as 0 is a valid token ID
+        if verify_result.bonus_token is not None:
             new_tokens.append(verify_result.bonus_token)
 
         # Check for EOS in newly generated tokens
         if eos_token_id is not None and eos_token_id in new_tokens:
             logger.info("EOS token found at round %d", round_idx)
             # Truncate at EOS
-            try:
-                eos_pos = new_tokens.index(eos_token_id)
-                new_tokens = new_tokens[: eos_pos + 1]
-            except ValueError:
-                pass
+            eos_pos = new_tokens.index(eos_token_id)
+            new_tokens = new_tokens[: eos_pos + 1]
             state.is_finished = True
 
         state.generated_tokens.extend(new_tokens)
@@ -582,7 +605,7 @@ async def run_speculative_loop_async(
         current_context = list(prompt_ids) + state.generated_tokens
 
         logger.info(
-            "Round %d: accepted %d/%d (path_depth=%d, tree_nodes=%d), bonus=%d, total_output=%d",
+            "Round %d: accepted %d/%d (path_depth=%d, tree_nodes=%d), bonus=%s, total_output=%d",
             round_idx,
             verify_result.accepted_length,
             path_depth,
