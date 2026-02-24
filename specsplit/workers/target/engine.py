@@ -98,11 +98,14 @@ def _cache_seq_len(past_key_values: Any) -> int:
         return 0
     if hasattr(past_key_values, "get_seq_length"):
         return past_key_values.get_seq_length()
+    # Convert DynamicCache (and similar) to legacy tuple so we can subscript safely
+    if hasattr(past_key_values, "to_legacy_cache"):
+        past_key_values = past_key_values.to_legacy_cache()
     # Legacy tuple format: (layer0_key, layer0_value), (layer1_key, layer1_value), ...
     return int(past_key_values[0][0].shape[2])
 
 
-def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:    
+def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:
     """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
 
     Performs a BFS/DFS traversal of the tree and assigns contiguous indices
@@ -309,21 +312,19 @@ class TargetEngine:
             logger.debug("Rollback no-op: accepted_depth == seq_len (%d)", accepted_depth)
             return
 
-        # Support both Cache API (DynamicCache, etc.) and legacy tuple format
-        if hasattr(cache.past_key_values, "crop"):
-            cache.past_key_values.crop(accepted_depth)
-        else:
-            # Legacy tuple format: crop each layer's (key, value) along seq dimension (dim=2)
-            # HuggingFace past_key_values shape: (key, value) each (batch, heads, seq, head_dim)
-            rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
-            for layer_key, layer_value in cache.past_key_values:
-                rolled_back.append(
-                    (
-                        layer_key[:, :, :accepted_depth, :].contiguous(),
-                        layer_value[:, :, :accepted_depth, :].contiguous(),
-                    )
+        # Convert to legacy tuple if needed (DynamicCache, etc.), then crop in place
+        rolled_back: list[tuple[torch.Tensor, torch.Tensor]] = []
+        past_kv = cache.past_key_values
+        if hasattr(past_kv, "to_legacy_cache"):
+            past_kv = past_kv.to_legacy_cache()
+        for layer_key, layer_value in past_kv:
+            rolled_back.append(
+                (
+                    layer_key[:, :, :accepted_depth, :].contiguous(),
+                    layer_value[:, :, :accepted_depth, :].contiguous(),
                 )
-            cache.past_key_values = tuple(rolled_back)
+            )
+        cache.past_key_values = tuple(rolled_back)
 
         old_len = cache.seq_len
         cache.seq_len = accepted_depth
@@ -450,7 +451,9 @@ class TargetEngine:
 
             # --- Step 5: Update session cache ---
             new_past_kv = outputs.past_key_values
-            new_seq_len = _cache_seq_len(new_past_kv)
+            if hasattr(new_past_kv, "to_legacy_cache"):
+                new_past_kv = new_past_kv.to_legacy_cache()
+            new_seq_len = new_past_kv[0][0].shape[2] if new_past_kv else 0
 
             if cache_state is not None:
                 cache_state.past_key_values = new_past_kv
@@ -535,8 +538,13 @@ class TargetEngine:
                             past_key_values=cache_state.past_key_values,
                             use_cache=True,
                         )
-                    cache_state.past_key_values = correction_output.past_key_values
-                    cache_state.seq_len = _cache_seq_len(correction_output.past_key_values)
+                    corr_past_kv = correction_output.past_key_values
+                    if hasattr(corr_past_kv, "to_legacy_cache"):
+                        corr_past_kv = corr_past_kv.to_legacy_cache()
+                    cache_state.past_key_values = corr_past_kv
+                    cache_state.seq_len = (
+                        corr_past_kv[0][0].shape[2] if corr_past_kv else 0
+                    )
                     cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
                 else:
                     if num_accepted > 0:
