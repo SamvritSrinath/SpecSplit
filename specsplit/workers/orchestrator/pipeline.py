@@ -522,10 +522,17 @@ async def run_speculative_loop_async(
         # --------------------------------------------------------------
         # Step C: Check if our speculation was correct
         # --------------------------------------------------------------
-        actual_accepted = list(verify_result.accepted_tokens)
-        speculation_correct = actual_accepted == speculative_assumption[
-            : len(actual_accepted)
-        ]
+        # Speculation is valid only if the full output of round N
+        # (accepted tokens + bonus/correction) exactly equals the assumed
+        # path — meaning the actual new context == speculative_context.
+        # A prefix-only check is always True for a linear chain (since
+        # accepted tokens are always a prefix of the assumed path by
+        # construction), which would cause us to reuse a stale draft
+        # computed for the wrong context position.
+        full_actual = list(verify_result.accepted_tokens)
+        if verify_result.bonus_token and verify_result.bonus_token != 0:
+            full_actual.append(verify_result.bonus_token)
+        speculation_correct = full_actual == list(speculative_assumption)
 
         if speculation_correct:
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
