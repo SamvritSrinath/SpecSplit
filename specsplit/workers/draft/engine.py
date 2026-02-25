@@ -341,11 +341,8 @@ class DraftEngine:
                 )
 
                 # 3. Convert back to DynamicCache for modern HF models
-                try:
-                    from transformers import DynamicCache
-                    batch_past_kv = DynamicCache.from_legacy_cache(batch_past_kv)
-                except ImportError:
-                    pass
+                from transformers import DynamicCache
+                batch_past_kv = DynamicCache(config=self._model.config, ddp_cache_data=batch_past_kv)
             else:
                 batch_past_kv = None
 

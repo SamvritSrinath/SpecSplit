@@ -593,11 +593,8 @@ class TargetEngine:
                 attn_mask_float = None
 
             if past_kv is not None and isinstance(past_kv, tuple):
-                try:
-                    from transformers import DynamicCache
-                    past_kv = DynamicCache.from_legacy_cache(past_kv)
-                except ImportError:
-                    pass
+                from transformers import DynamicCache
+                past_kv = DynamicCache(config=self._model.config, ddp_cache_data=past_kv)
 
             # --- Step 4: Forward pass ---
             with torch.no_grad():
@@ -727,11 +724,8 @@ class TargetEngine:
                     # FIX: Wrap the correction cache as well
                     corr_kv = cache_state.cache.get_all_kv() if cache_state.cache else None
                     if corr_kv is not None and isinstance(corr_kv, tuple):
-                        try:
-                            from transformers import DynamicCache
-                            corr_kv = DynamicCache.from_legacy_cache(corr_kv)
-                        except ImportError:
-                            pass
+                        from transformers import DynamicCache
+                        corr_kv = DynamicCache(config=self._model.config, ddp_cache_data=corr_kv)
 
                     with torch.no_grad():
                         correction_output = self._model(
