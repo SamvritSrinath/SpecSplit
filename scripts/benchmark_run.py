@@ -157,8 +157,7 @@ class BenchmarkOrchestrator:
         self._telemetry = TelemetryLogger(service_name="benchmark")
 
     def connect(self) -> None:
-        """Establish gRPC connections."""
-        self._orch.connect()
+        """No-op; gRPC connections are established lazily in the event loop."""
 
     def run_and_measure(self, prompt: str) -> RequestMetrics:
         """Run a single prompt through the pipeline and measure everything.
@@ -411,7 +410,6 @@ def main() -> None:
         logger.info("=== Starting sweep: gamma=%d (%d prompts) ===", gamma, len(dataset))
 
         bench_orch = BenchmarkOrchestrator(config=base_config, gamma=gamma)
-        bench_orch.connect()
 
         for i, entry in enumerate(dataset):
             prompt = entry["prompt"]
@@ -436,13 +434,10 @@ def main() -> None:
 
         logger.info("=== Completed sweep: gamma=%d ===", gamma)
 
-        # Issue 41: Close gRPC channels to prevent resource leaks
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        loop.run_until_complete(bench_orch._orch.close())
+        # Issue 41: Close gRPC channels to prevent resource leaks (use same loop as channels)
+        loop = bench_orch._orch._loop
+        if loop is not None and not loop.is_closed():
+            loop.run_until_complete(bench_orch._orch.close())
 
     # ---- Write results ----
     write_csv(all_metrics, args.output)

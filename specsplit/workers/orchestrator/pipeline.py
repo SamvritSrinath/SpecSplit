@@ -39,6 +39,8 @@ round-trip per iteration when the speculation is correct.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import inspect
 import logging
 import uuid
 from collections import deque
@@ -287,8 +289,8 @@ async def _call_generate_drafts(
 
     # Issue 9: Pass timeout to prevent indefinite hangs
     response = draft_stub.GenerateDrafts(request, timeout=config.timeout_s)
-    # Support both sync and async stubs
-    if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+    # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
+    if inspect.isawaitable(response):
         response = await response
 
     rpc_sw.stop()
@@ -361,8 +363,8 @@ async def _call_verify_drafts(
 
     # Issue 9: Pass timeout to prevent indefinite hangs
     response = target_stub.VerifyDrafts(request, timeout=config.timeout_s)
-    # Support both sync and async stubs
-    if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+    # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
+    if inspect.isawaitable(response):
         response = await response
 
     rpc_sw.stop()
@@ -409,7 +411,7 @@ async def _call_flush_draft_cache(
     request = spec_decoding_pb2.EndSessionRequest(session_id=session_id)
     try:
         response = target_stub.EndSession(request)
-        if asyncio.iscoroutine(response) or asyncio.isfuture(response):
+        if inspect.isawaitable(response):
             response = await response
         logger.debug(
             "Cache flush completed: session=%s, was_active=%s",
@@ -613,6 +615,12 @@ async def run_speculative_loop_async(
                         cfg.timeout_s,
                     )
                     state.is_finished = True
+                    # Cancel both tasks to avoid "Task was destroyed but it is pending"
+                    for t in (verify_task, speculative_draft_task):
+                        t.cancel()
+                    for t in (verify_task, speculative_draft_task):
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await t
                     break
 
                 # Cache-eviction retry: target rejected delta-only payload
@@ -630,6 +638,8 @@ async def run_speculative_loop_async(
                     )
                     # Cancel the speculative draft — we'll re-draft after retry
                     speculative_draft_task.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await speculative_draft_task
 
                     # Retry with full context (no deltas)
                     retry_result = await _call_verify_drafts(
@@ -654,6 +664,12 @@ async def run_speculative_loop_async(
                     )
                     state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
                 else:
+                    # Cancel both tasks before re-raising to avoid task leak
+                    for t in (verify_task, speculative_draft_task):
+                        t.cancel()
+                    for t in (verify_task, speculative_draft_task):
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await t
                     raise
 
         # Unwrap _RpcResult and accumulate RPC times

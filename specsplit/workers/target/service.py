@@ -105,7 +105,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             session_id=session_id or "stateless",
         ):
             prompt_ids: list[int] = list(request.prompt_token_ids)
-            new_ids: list[int] = list(request.new_token_ids)
+            new_ids: list[int] = list(getattr(request, "new_token_ids", []))
 
             # Bug 3: Delta-only mode — when prompt_token_ids is empty but
             # new_token_ids is populated, the orchestrator is sending only

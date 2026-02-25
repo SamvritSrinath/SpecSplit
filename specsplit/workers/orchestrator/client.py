@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import inspect
 import logging
 import os
 import uuid
@@ -59,6 +60,7 @@ class Orchestrator:
         self._telemetry = TelemetryLogger(service_name="orchestrator")
         self._draft_channel: grpc.Channel | None = None
         self._target_channel: grpc.Channel | None = None
+        self._loop: asyncio.AbstractEventLoop | None = None
         self._draft_stub: spec_decoding_pb2_grpc.DraftServiceStub | None = None
         self._target_stub: spec_decoding_pb2_grpc.TargetServiceStub | None = None
         self._tokenizer: Any = None
@@ -131,6 +133,11 @@ class Orchestrator:
         """
         logger.info("Starting generation for prompt: %r", prompt[:80])
 
+        # Create gRPC channels in the current event loop (grpc.aio channels are
+        # loop-bound; creating them from sync code causes "attached to different loop")
+        if self._draft_channel is None:
+            self.connect()
+
         tokenizer = self._ensure_tokenizer()
         prompt_ids: list[int] = tokenizer.encode(prompt)
         eos_token_id: int = tokenizer.eos_token_id or 2
@@ -172,7 +179,7 @@ class Orchestrator:
                         session_id=session_id,
                     )
                     end_resp = self._target_stub.EndSession(end_req)
-                    if asyncio.iscoroutine(end_resp) or asyncio.isfuture(end_resp):
+                    if inspect.isawaitable(end_resp):
                         await end_resp
                     logger.debug("Session ended: %s", session_id)
                 except Exception:
@@ -200,14 +207,14 @@ class Orchestrator:
         Returns:
             A tuple of (generated output text, PipelineResult with full metrics).
         """
-        # Because we bind to a specific loop in connect() depending on when it's called,
-        # calling asyncio.run() repeatedly creates new loops which crashes aio channels.
-        # So we should get the current loop or make one and run until complete.
+        # Reuse the same event loop across calls so gRPC channels stay bound correctly.
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
+            if self._loop is None or self._loop.is_closed():
+                self._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(self._loop)
+            loop = self._loop
 
         return loop.run_until_complete(self.run_with_result(prompt))
 
@@ -327,8 +334,12 @@ def main() -> None:
         )
 
     orch = Orchestrator(config=config, model_name=model_name)
-    orch.connect()
-    output_text, result = orch.run_with_result_sync(args.prompt)
+
+    async def _run() -> tuple[str, PipelineResult]:
+        orch.connect()  # Must be inside event loop (grpc.aio channels are loop-bound)
+        return await orch.run_with_result(args.prompt)
+
+    output_text, result = asyncio.run(_run())
 
     print(f"\n{'=' * 60}")
     print("Generated Output:")
