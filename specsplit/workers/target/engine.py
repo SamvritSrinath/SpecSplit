@@ -32,7 +32,6 @@ from transformers import AutoModelForCausalLM, AutoTokenizer
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch
 from specsplit.core.verification import (
-    VerificationResult as CoreVerificationResult,
     verify_greedy_tree,
     verify_stochastic_tree,
 )
@@ -593,6 +592,13 @@ class TargetEngine:
             else:
                 attn_mask_float = None
 
+            if past_kv is not None and isinstance(past_kv, tuple):
+                try:
+                    from transformers import DynamicCache
+                    past_kv = DynamicCache.from_legacy_cache(past_kv)
+                except ImportError:
+                    pass
+
             # --- Step 4: Forward pass ---
             with torch.no_grad():
                 outputs = self._model(
@@ -717,10 +723,20 @@ class TargetEngine:
 
                 if correction is not None and correction >= 0:
                     correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
+
+                    # FIX: Wrap the correction cache as well
+                    corr_kv = cache_state.cache.get_all_kv() if cache_state.cache else None
+                    if corr_kv is not None and isinstance(corr_kv, tuple):
+                        try:
+                            from transformers import DynamicCache
+                            corr_kv = DynamicCache.from_legacy_cache(corr_kv)
+                        except ImportError:
+                            pass
+
                     with torch.no_grad():
                         correction_output = self._model(
                             input_ids=correction_input,
-                            past_key_values=cache_state.cache.get_all_kv() if cache_state.cache else None,
+                            past_key_values=corr_kv,
                             use_cache=True,
                         )
                     # Append correction token's KV to the StaticKVCache

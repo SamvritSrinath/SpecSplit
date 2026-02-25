@@ -314,22 +314,38 @@ class DraftEngine:
 
             # Stack KV caches along batch dimension
             first_kv = expansion_items[0][3]
-            if first_kv is not None and isinstance(first_kv, tuple):
+            if first_kv is not None:
+                # 1. Normalize all incoming KV caches to legacy tuples
+                legacy_kvs = []
+                for item in expansion_items:
+                    kv = item[3]
+                    if hasattr(kv, "to_legacy_cache"):
+                        legacy_kvs.append(kv.to_legacy_cache())
+                    elif hasattr(kv, "layers") and isinstance(kv.layers, (list, tuple)):
+                        legacy_kvs.append(tuple((l.keys, l.values) for l in kv.layers))
+                    else:
+                        legacy_kvs.append(kv)
+
+                # 2. Stack the legacy tuples along the batch dimension
                 batch_past_kv = tuple(
                     tuple(
                         torch.cat([
-                            expansion_items[j][3][layer_idx][t_idx]
-                            if expansion_items[j][3][layer_idx][t_idx].shape[0] == 1
-                            else expansion_items[j][3][layer_idx][t_idx][:1]
+                            legacy_kvs[j][layer_idx][t_idx]
+                            if legacy_kvs[j][layer_idx][t_idx].shape[0] == 1
+                            else legacy_kvs[j][layer_idx][t_idx][:1]
                             for j in range(total_items)
                         ], dim=0)
                         for t_idx in range(2)  # key, value
                     )
-                    for layer_idx in range(len(first_kv))
+                    for layer_idx in range(len(legacy_kvs[0]))
                 )
-            elif first_kv is not None and hasattr(first_kv, "key_cache"):
-                # DynamicCache — fall back to expanding
-                batch_past_kv = first_kv
+
+                # 3. Convert back to DynamicCache for modern HF models
+                try:
+                    from transformers import DynamicCache
+                    batch_past_kv = DynamicCache.from_legacy_cache(batch_past_kv)
+                except ImportError:
+                    pass
             else:
                 batch_past_kv = None
 
