@@ -97,10 +97,13 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
             prompt_ids: list[int] = list(request.prompt_token_ids)
             sw = Stopwatch()
             sw.start()
-            # Use request values; proto default 0.0 for temperature. Avoid "or None" so 0.0 (greedy) is respected.
+            # Use request values; proto default 0.0 for temperature.
+            # Fix Bug 5: proto3 defaults unset float to 0.0, so request.temperature >= 0
+            # is always true. Use temp > 0 to mean "use request"; else None → use
+            # config.temperature (SPECSPLIT_DRAFT_TEMPERATURE env var).
             k = request.max_draft_len if request.max_draft_len > 0 else None
             num_beams = request.num_beams if request.num_beams > 0 else None
-            temp = request.temperature if request.temperature >= 0 else None
+            temp = request.temperature if request.temperature > 0 else None
 
             roots: list[TokenNode] = self._engine.generate_draft_tree(
                 prompt_ids=prompt_ids,

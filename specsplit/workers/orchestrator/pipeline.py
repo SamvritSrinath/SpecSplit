@@ -396,7 +396,7 @@ async def _call_verify_drafts(
     return _RpcResult(value=vr, elapsed_ms=rpc_sw.elapsed_ms)
 
 
-async def _call_flush_draft_cache(
+async def _call_flush_target_cache(
     target_stub: Any,
     session_id: str,
 ) -> None:
@@ -846,7 +846,7 @@ async def run_speculative_loop_async(
 
             # Send flush signal to Target Worker to clear its speculative cache (no-op when stateless)
             if session_id is not None:
-                await _call_flush_draft_cache(target_stub, session_id)
+                await _call_flush_target_cache(target_stub, session_id)
 
             # Re-draft from the CORRECTED context, with reset_cache=True
             # to invalidate the draft engine's stale cross-round KV cache.

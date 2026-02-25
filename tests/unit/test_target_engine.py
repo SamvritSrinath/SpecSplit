@@ -114,6 +114,9 @@ def _make_mock_target_model(
         if past_key_values is not None:
             if isinstance(past_key_values, tuple):
                 cache_len += past_key_values[0][0].shape[2]
+            elif hasattr(past_key_values, "get_seq_length"):
+                # DynamicCache (modern transformers)
+                cache_len += past_key_values.get_seq_length()
             elif hasattr(past_key_values, "seq_len"):
                 cache_len += past_key_values.seq_len
         fake_kv = tuple(

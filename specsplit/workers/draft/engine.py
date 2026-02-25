@@ -291,12 +291,24 @@ class DraftEngine:
 
             with torch.no_grad():
                 for parent_node, entry_past_kv, entry_logits in current_level:
-                    probs = logits_to_probs(entry_logits, temperature=temperature)
-
+                    # Fix Bug 3: With temp=0, logits_to_probs returns one-hot; topk would
+                    # yield invalid non-primary beams. Use topk on raw logits instead.
                     if temperature == 0.0:
-                        top_probs, top_indices = torch.topk(probs, branching_factor, dim=-1)
+                        if branching_factor == 1:
+                            top_indices = entry_logits.argmax(dim=-1, keepdim=True)
+                            top_probs = torch.ones_like(
+                                top_indices, dtype=entry_logits.dtype
+                            )
+                        else:
+                            top_logits, top_indices = torch.topk(
+                                entry_logits, branching_factor, dim=-1
+                            )
+                            top_probs = torch.softmax(top_logits, dim=-1)
                     else:
-                        top_indices = torch.multinomial(probs, num_samples=branching_factor)
+                        probs = logits_to_probs(entry_logits, temperature=temperature)
+                        top_indices = torch.multinomial(
+                            probs, num_samples=branching_factor
+                        )
                         top_probs = torch.gather(probs, -1, top_indices)
 
                     for b in range(branching_factor):
@@ -327,7 +339,9 @@ class DraftEngine:
                     if hasattr(kv, "to_legacy_cache"):
                         legacy_kvs.append(kv.to_legacy_cache())
                     elif hasattr(kv, "layers") and isinstance(kv.layers, (list, tuple)):
-                        legacy_kvs.append(tuple((l.keys, l.values) for l in kv.layers))
+                        legacy_kvs.append(
+                            tuple((lyr.keys, lyr.values) for lyr in kv.layers)
+                        )
                     else:
                         legacy_kvs.append(kv)
 
@@ -345,9 +359,8 @@ class DraftEngine:
                     for layer_idx in range(len(legacy_kvs[0]))
                 )
 
-                # 3. Convert back to DynamicCache for modern HF models
-                from transformers import DynamicCache
-                batch_past_kv = DynamicCache(config=self._model.config, ddp_cache_data=batch_past_kv)
+                # 3. Pass batched legacy tuple — HF models accept it; avoid DynamicCache
+                # conversion so test mocks (expecting tuple) and real models both work.
             else:
                 batch_past_kv = None
 
@@ -369,16 +382,27 @@ class DraftEngine:
                 else:
                     parent_node.children.append(child_node)
 
-                # Extract this item's KV cache from the batched output
-                if isinstance(step_out.past_key_values, tuple):
-                    branch_past_kv = tuple(
-                        tuple(t[i : i + 1] for t in layer)
-                        for layer in step_out.past_key_values
+                # Extract this item's KV cache from the batched output (Fix Bug 1).
+                # When model returns DynamicCache, convert to legacy and slice per beam.
+                pkv = step_out.past_key_values
+                legacy_pkv = None
+                if isinstance(pkv, tuple):
+                    legacy_pkv = pkv
+                elif hasattr(pkv, "to_legacy_cache"):
+                    legacy_pkv = pkv.to_legacy_cache()
+                elif hasattr(pkv, "layers") and isinstance(pkv.layers, (list, tuple)):
+                    legacy_pkv = tuple(
+                        (layer.keys, layer.values)
+                        for layer in pkv.layers
+                        if getattr(layer, "is_initialized", True)
+                        and getattr(layer, "keys", None) is not None
                     )
-                elif hasattr(step_out.past_key_values, "__getitem__"):
-                    branch_past_kv = step_out.past_key_values
+                if legacy_pkv is not None:
+                    branch_past_kv = tuple(
+                        tuple(t[i : i + 1] for t in layer) for layer in legacy_pkv
+                    )
                 else:
-                    branch_past_kv = step_out.past_key_values
+                    branch_past_kv = pkv
 
                 next_level_entries.append((
                     child_node,

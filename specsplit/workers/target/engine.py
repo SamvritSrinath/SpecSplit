@@ -29,6 +29,7 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from specsplit.core.cache_utils import legacy_to_dynamic_cache
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch
 from specsplit.core.verification import (
@@ -593,8 +594,7 @@ class TargetEngine:
                 attn_mask_float = None
 
             if past_kv is not None and isinstance(past_kv, tuple):
-                from transformers import DynamicCache
-                past_kv = DynamicCache(config=self._model.config, ddp_cache_data=past_kv)
+                past_kv = legacy_to_dynamic_cache(past_kv, self._model.config)
 
             # --- Step 4: Forward pass ---
             with torch.no_grad():
@@ -724,8 +724,7 @@ class TargetEngine:
                     # FIX: Wrap the correction cache as well
                     corr_kv = cache_state.cache.get_all_kv() if cache_state.cache else None
                     if corr_kv is not None and isinstance(corr_kv, tuple):
-                        from transformers import DynamicCache
-                        corr_kv = DynamicCache(config=self._model.config, ddp_cache_data=corr_kv)
+                        corr_kv = legacy_to_dynamic_cache(corr_kv, self._model.config)
 
                     with torch.no_grad():
                         correction_output = self._model(
@@ -740,8 +739,12 @@ class TargetEngine:
                         corr_start = cache_state.cache.seq_len
                         corr_new = corr_full_len - corr_start
                         if corr_new > 0:
-                            corr_keys = torch.stack([l[0][:, :, corr_start:, :] for l in corr_hf], dim=0)
-                            corr_values = torch.stack([l[1][:, :, corr_start:, :] for l in corr_hf], dim=0)
+                            corr_keys = torch.stack(
+                                [layer[0][:, :, corr_start:, :] for layer in corr_hf], dim=0
+                            )
+                            corr_values = torch.stack(
+                                [layer[1][:, :, corr_start:, :] for layer in corr_hf], dim=0
+                            )
                             cache_state.cache.append(corr_keys, corr_values)
                         cache_state.seq_len = cache_state.cache.seq_len
                     cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
@@ -751,6 +754,20 @@ class TargetEngine:
                             cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
                         else:
                             cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
+                    else:
+                        # Fix Bug 2: Total rejection (num_accepted==0, correction is None).
+                        # On cache hit, all_logits has only tree rows [0..num_tree_nodes-1];
+                        # row 0 predicts what follows the first tree token (root). Use it
+                        # so the next round has valid next_root_logit (avoiding OOB when
+                        # next_root_logit was None and elif prefix_length>0 used wrong index).
+                        if cache_hit:
+                            cache_state.next_root_logit = all_logits[0, 0, :].detach().clone()
+                        elif prefix_length > 0:
+                            cache_state.next_root_logit = all_logits[
+                                0, prefix_length - 1, :
+                            ].detach().clone()
+                        else:
+                            cache_state.next_root_logit = None
 
             sw.stop()
             return VerificationResult(
