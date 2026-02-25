@@ -188,6 +188,11 @@ class OrchestratorConfig(BaseSettings):
         ge=0.0,
         description="Sampling temperature for verification. 0.0 = greedy, >0.0 = stochastic rejection sampling.",
     )
+    draft_temperature: float = Field(
+        default=0.0,
+        ge=0.0,
+        description="Sampling temperature for draft generation. 0.0 = greedy (aligns with verify). Passed to draft worker.",
+    )
     tokenizer_model: str = Field(
         default="gpt2",
         description="HuggingFace model name for the tokenizer. Must match the target/draft model (e.g. Qwen2/Qwen2.5-7B-Instruct); otherwise acceptance is 0%% and output is gibberish.",

@@ -66,10 +66,12 @@ class Orchestrator:
         self._tokenizer: Any = None
 
         logger.info(
-            "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s)",
+            "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s, max_draft=%d, draft_temp=%.2f)",
             self.config.draft_address,
             self.config.target_address,
             self.model_name,
+            self.config.max_draft_tokens,
+            self.config.draft_temperature,
         )
 
     def _ensure_tokenizer(self) -> Any:
@@ -256,6 +258,18 @@ def main() -> None:
         help="Maximum draft→verify rounds (overrides config)",
     )
     parser.add_argument(
+        "--max-draft-tokens",
+        type=int,
+        default=None,
+        help="Draft tree depth K (overrides config). Lower = higher acceptance, fewer tokens/round.",
+    )
+    parser.add_argument(
+        "--draft-temperature",
+        type=float,
+        default=None,
+        help="Draft sampling temperature. 0 = greedy (align with target). Overrides config.",
+    )
+    parser.add_argument(
         "--model-name",
         type=str,
         default=None,
@@ -305,6 +319,10 @@ def main() -> None:
         config_kw["max_rounds"] = args.max_rounds
     if args.max_output_tokens is not None:
         config_kw["max_output_tokens"] = args.max_output_tokens
+    if args.max_draft_tokens is not None:
+        config_kw["max_draft_tokens"] = args.max_draft_tokens
+    if args.draft_temperature is not None:
+        config_kw["draft_temperature"] = args.draft_temperature
     config = OrchestratorConfig(**config_kw)
 
     # Model name priority: --model-name > config file > OrchestratorConfig.tokenizer_model

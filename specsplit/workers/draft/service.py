@@ -97,11 +97,16 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
             prompt_ids: list[int] = list(request.prompt_token_ids)
             sw = Stopwatch()
             sw.start()
+            # Use request values; proto default 0.0 for temperature. Avoid "or None" so 0.0 (greedy) is respected.
+            k = request.max_draft_len if request.max_draft_len > 0 else None
+            num_beams = request.num_beams if request.num_beams > 0 else None
+            temp = request.temperature if request.temperature >= 0 else None
+
             roots: list[TokenNode] = self._engine.generate_draft_tree(
                 prompt_ids=prompt_ids,
-                k=request.max_draft_len or None,
-                num_beams=request.num_beams or None,
-                temperature=request.temperature or None,
+                k=k,
+                num_beams=num_beams,
+                temperature=temp,
                 session_id=request.session_id or None,
             )
             sw.stop()
@@ -121,10 +126,14 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
                 telemetry=telemetry_meta,
             )
 
+            effective_k = k or self._engine.config.max_draft_tokens
+            effective_temp = temp if temp is not None else self._engine.config.temperature
             logger.info(
-                "GenerateDrafts completed: request_id=%s, roots=%d, model_ms=%.1f",
+                "GenerateDrafts completed: request_id=%s, roots=%d, k=%d, temp=%.2f, model_ms=%.1f",
                 request.request_id,
                 len(roots),
+                effective_k,
+                effective_temp,
                 sw.elapsed_ms,
             )
             return response

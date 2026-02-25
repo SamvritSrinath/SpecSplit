@@ -283,6 +283,7 @@ async def _call_generate_drafts(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
         max_draft_len=config.max_draft_tokens,
+        temperature=config.draft_temperature,
         reset_cache=reset_cache,
         session_id=session_id or "",
     )
@@ -483,10 +484,12 @@ async def run_speculative_loop_async(
     # Phase 0: Generate the first draft tree (no overlap possible here)
     # ------------------------------------------------------------------
     logger.info(
-        "Starting speculative loop: prompt_len=%d, max_rounds=%d, max_output=%d",
+        "Starting speculative loop: prompt_len=%d, max_rounds=%d, max_output=%d, k=%d, draft_temp=%.2f",
         len(prompt_ids),
         cfg.max_rounds,
         cfg.max_output_tokens,
+        cfg.max_draft_tokens,
+        cfg.draft_temperature,
     )
 
     current_context = list(prompt_ids)

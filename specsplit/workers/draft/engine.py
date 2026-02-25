@@ -167,6 +167,11 @@ class DraftEngine:
         num_beams = num_beams or self.config.num_beams
         temperature = temperature if temperature is not None else self.config.temperature
 
+        logger.debug(
+            "Draft generation: k=%d, num_beams=%d, temperature=%.2f (greedy=%s)",
+            k, num_beams, temperature, temperature == 0.0,
+        )
+
         sw = Stopwatch()
         sw.start()
 
