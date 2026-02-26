@@ -27,12 +27,13 @@ def _make_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> Mag
         logits = torch.zeros(batch, seq_len, vocab_size)
         logits[:, :, deterministic_token] = 10.0  # argmax → deterministic_token
 
-        # Fake KV cache: 2 layers
+        # Fake KV cache: 2 layers, batch size must match input for batched beam slicing
         cache_len = seq_len
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -77,7 +78,8 @@ def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 4
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()

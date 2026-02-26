@@ -210,6 +210,105 @@ def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
     return token_ids, topology_map
 
 
+def _flatten_proto_tree_with_topk(
+    proto_nodes: list[Any],
+) -> tuple[list[int], list[int], list[tuple[list[int], list[float]]], list[float]]:
+    """Flatten nested protobuf TokenNode messages with top-k draft distributions.
+
+    Same BFS ordering as _flatten_proto_tree. Returns per-node top_k data
+    and log_probs for correct residual sampling in stochastic verification.
+
+    Returns:
+        (token_ids, topology_map, top_k_per_node, log_probs) where:
+        - top_k_per_node[i] is (top_k_token_ids, top_k_probs) for node i
+        - log_probs[i] is the draft log-probability for node i (critical for
+          stochastic acceptance: q_val = exp(log_prob); p_val >= q_val check).
+    """
+    token_ids: list[int] = []
+    topology_map: list[int] = []
+    top_k_per_node: list[tuple[list[int], list[float]]] = []
+    log_probs: list[float] = []
+
+    queue: deque[tuple[Any, int]] = deque()
+    for root in proto_nodes:
+        queue.append((root, -1))
+
+    while queue:
+        node, parent_idx = queue.popleft()
+        my_idx = len(token_ids)
+        token_ids.append(node.token_id)
+        topology_map.append(parent_idx)
+        tk_ids = list(node.top_k_token_ids) if node.top_k_token_ids else []
+        tk_probs = list(node.top_k_probs) if node.top_k_probs else []
+        top_k_per_node.append((tk_ids, tk_probs))
+        log_probs.append(getattr(node, "log_prob", 0.0))
+        for child in node.children:
+            queue.append((child, my_idx))
+
+    return token_ids, topology_map, top_k_per_node, log_probs
+
+
+def _arrays_to_proto_nodes(
+    token_ids: list[int],
+    topology_map: list[int],
+    top_k_per_node: list[tuple[list[int], list[float]]] | None = None,
+    log_probs: list[float] | None = None,
+) -> list[Any]:
+    """Build protobuf TokenNode list from flat token_ids and topology_map.
+
+    Inverse of _flatten_proto_tree. Uses BFS ordering to match the target
+    engine's _flatten_tree. When log_probs is provided, each node gets the
+    corresponding draft log-probability (required for stochastic verification:
+    q_val = exp(log_prob); acceptance check p_val >= q_val). When top_k_per_node
+    is provided, includes top-k distributions for correct residual sampling.
+
+    Args:
+        token_ids: Flat list of token IDs in BFS order.
+        topology_map: Parent index for each node (-1 = root).
+        top_k_per_node: Optional list of (top_k_token_ids, top_k_probs) per
+            node in same order as token_ids. When absent, nodes get empty top-k.
+        log_probs: Optional list of draft log-probabilities per node. When
+            absent, nodes get log_prob=0.0 (causes q_val=1.0, breaks stochastic).
+
+    Returns:
+        Root-level spec_decoding_pb2.TokenNode protobuf messages.
+    """
+    from specsplit.proto import spec_decoding_pb2
+
+    num_nodes = len(token_ids)
+    if num_nodes == 0:
+        return []
+
+    if top_k_per_node is None:
+        top_k_per_node = [([], []) for _ in range(num_nodes)]
+    elif len(top_k_per_node) != num_nodes:
+        top_k_per_node = top_k_per_node[:num_nodes] + [([], [])] * max(
+            0, num_nodes - len(top_k_per_node)
+        )
+
+    if log_probs is None or len(log_probs) != num_nodes:
+        log_probs_arr = [0.0] * num_nodes
+    else:
+        log_probs_arr = log_probs[:num_nodes]
+
+    children: dict[int, list[int]] = {}
+    for i, p in enumerate(topology_map):
+        children.setdefault(p, []).append(i)
+    roots = children.get(-1, [])
+
+    def build_node(idx: int) -> Any:
+        tk_ids, tk_probs = top_k_per_node[idx]
+        return spec_decoding_pb2.TokenNode(
+            token_id=token_ids[idx],
+            log_prob=log_probs_arr[idx],
+            children=[build_node(c) for c in children.get(idx, [])],
+            top_k_token_ids=tk_ids,
+            top_k_probs=tk_probs,
+        )
+
+    return [build_node(r) for r in roots]
+
+
 def _get_longest_path(draft: DraftTree) -> list[int]:
     """Extract the longest root-to-leaf path from a flattened tree.
 
@@ -270,14 +369,13 @@ async def _call_generate_drafts(
     Raises:
         grpc.aio.AioRpcError: Re-raised for non-timeout gRPC errors.
     """
-    # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
+    rpc_sw.start()
 
-    # Inject Synthetic RTT Latency (Task 4.1)
+    # Inject Synthetic RTT Latency (Task 4.1) — inside stopwatch so elapsed_ms
+    # includes it; avoids double-counting when accumulating total_rpc_time_ms.
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
-
-    rpc_sw.start()
 
     request = spec_decoding_pb2.DraftRequest(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
@@ -322,6 +420,7 @@ async def _call_verify_drafts(
     session_id: str | None,
     config: OrchestratorConfig,
     new_token_ids: list[int] | None = None,
+    expected_prefix_length: int = 0,
 ) -> _RpcResult[VerificationResult]:
     """Call ``TargetService.VerifyDrafts`` over gRPC.
 
@@ -344,14 +443,13 @@ async def _call_verify_drafts(
     Raises:
         grpc.aio.AioRpcError: Re-raised for non-timeout gRPC errors.
     """
-    # Remove simulated RTT from the raw RPC stopwatch
     rpc_sw = Stopwatch()
+    rpc_sw.start()
 
-    # Inject Synthetic RTT Latency (Task 4.1)
+    # Inject Synthetic RTT Latency (Task 4.1) — inside stopwatch so elapsed_ms
+    # includes it; avoids double-counting when accumulating total_rpc_time_ms.
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
-
-    rpc_sw.start()
 
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
@@ -360,6 +458,7 @@ async def _call_verify_drafts(
         session_id=session_id or "",
         temperature=config.verify_temperature,
         new_token_ids=new_token_ids or [],
+        expected_prefix_length=expected_prefix_length,
     )
 
     # Issue 9: Pass timeout to prevent indefinite hangs
@@ -582,6 +681,7 @@ async def run_speculative_loop_async(
                 session_id,
                 cfg,
                 new_token_ids=delta_token_ids,
+                expected_prefix_length=verified_context_len,
             )
         )
 
@@ -652,6 +752,7 @@ async def run_speculative_loop_async(
                         session_id,
                         cfg,
                         new_token_ids=None,
+                        expected_prefix_length=0,
                     )
                     verify_rpc_result = retry_result
                     state.total_rpc_time_ms += retry_result.elapsed_ms
@@ -679,15 +780,12 @@ async def run_speculative_loop_async(
         verify_result = verify_rpc_result.value
         speculative_draft = speculative_draft_rpc_result.value
 
-        # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum
+        # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum.
+        # elapsed_ms already includes simulated_rtt (sleep is inside RPC stopwatch).
         state.total_rpc_time_ms += max(
             verify_rpc_result.elapsed_ms,
             speculative_draft_rpc_result.elapsed_ms
         )
-
-        # Also add simulated RTT back into network_idle_ms if we are modelling overlapping
-        if cfg.simulated_rtt_ms > 0:
-            state.total_rpc_time_ms += cfg.simulated_rtt_ms
 
         # --------------------------------------------------------------
         # Step B: Process verification result
@@ -793,45 +891,100 @@ async def run_speculative_loop_async(
             # 🎉 Speculation hit!  Use the pre-computed draft N+1.
             state.speculation_hits += 1
 
-            # If a non-primary root matched, prune the draft tree to only
-            # the matched root's subtree (its descendants).
-            if matched_root_idx is not None and matched_root_idx > 0:
-                # Find all descendants of the matched root
+            # Prune the draft tree for ALL matched roots (including primary idx 0).
+            # Promote the matched root's children to new roots and discard the
+            # matched node. The bonus token is already appended; the next round
+            # must compare target's prediction *after* bonus against draft's
+            # children (guesses for next token), not the bonus itself.
+            if matched_root_idx is not None:
                 old_ids = speculative_draft.token_ids
                 old_topo = speculative_draft.topology_map
-                # BFS from matched root to collect the subtree
-                keep = set()
-                queue_prune = [matched_root_idx]
-                while queue_prune:
-                    node = queue_prune.pop(0)
-                    keep.add(node)
-                    for j, parent in enumerate(old_topo):
-                        if parent == node and j not in keep:
-                            queue_prune.append(j)
-                sorted_keep = sorted(keep)
-                # Remap indices to contiguous [0, 1, 2, ...]
-                old_to_new = {old: new for new, old in enumerate(sorted_keep)}
-                new_ids = [old_ids[i] for i in sorted_keep]
-                new_topo = [
-                    -1 if old_topo[i] == -1 or i == matched_root_idx
-                    else old_to_new.get(old_topo[i], -1)
-                    for i in sorted_keep
+                # BFS from CHILDREN of matched root (promote them to roots)
+                children_of_matched = [
+                    j for j, p in enumerate(old_topo) if p == matched_root_idx
                 ]
-                current_draft = DraftTree(
-                    token_ids=new_ids,
-                    topology_map=new_topo,
-                    proto_nodes=speculative_draft.proto_nodes,
-                    round_idx=speculative_draft.round_idx,
-                )
-                logger.info(
-                    "Speculation HIT at round %d — reusing draft N+1 "
-                    "(pruned to root %d, %d→%d nodes)",
-                    round_idx, matched_root_idx,
-                    len(old_ids), len(new_ids),
-                )
+                if not children_of_matched:
+                    # Matched root is a leaf — no subtree to reuse; re-draft
+                    current_draft = None
+                    state.speculation_hits -= 1
+                    state.speculation_misses += 1
+                    logger.info(
+                        "Speculation HIT at round %d — matched root is leaf, "
+                        "re-drafting from corrected context",
+                        round_idx,
+                    )
+                    if session_id is not None:
+                        await _call_flush_target_cache(target_stub, session_id)
+                    with telemetry.span("re_draft", round_idx=round_idx):
+                        try:
+                            re_draft_rpc = await _call_generate_drafts(
+                                draft_stub,
+                                prompt_ids,
+                                current_context,
+                                cfg,
+                                round_idx=round_idx + 1,
+                                reset_cache=True,
+                                session_id=session_id,
+                            )
+                        except grpc.aio.AioRpcError as e:
+                            if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
+                                logger.warning(
+                                    "Re-draft RPC timed out at round %d.",
+                                    round_idx,
+                                )
+                                state.is_finished = True
+                                break
+                            raise
+                        current_draft = re_draft_rpc.value
+                        state.total_rpc_time_ms += re_draft_rpc.elapsed_ms
+                    speculative_draft = None
+                else:
+                    keep: set[int] = set()
+                    queue_prune = list(children_of_matched)
+                    while queue_prune:
+                        node = queue_prune.pop(0)
+                        keep.add(node)
+                        for j, parent in enumerate(old_topo):
+                            if parent == node and j not in keep:
+                                queue_prune.append(j)
+                    sorted_keep = sorted(keep)
+                    old_to_new = {old: new for new, old in enumerate(sorted_keep)}
+                    new_ids = [old_ids[i] for i in sorted_keep]
+                    new_topo = [
+                        -1 if old_topo[i] == matched_root_idx
+                        else old_to_new.get(old_topo[i], -1)
+                        for i in sorted_keep
+                    ]
+                    # Preserve top_k and log_probs from original tree for correct
+                    # residual sampling and stochastic acceptance (q_val = exp(log_prob)).
+                    _, _, orig_top_k, orig_log_probs = _flatten_proto_tree_with_topk(
+                        speculative_draft.proto_nodes
+                    )
+                    new_top_k = [orig_top_k[old_idx] for old_idx in sorted_keep]
+                    new_log_probs = [orig_log_probs[old_idx] for old_idx in sorted_keep]
+                    proto_nodes = _arrays_to_proto_nodes(
+                        new_ids, new_topo, top_k_per_node=new_top_k, log_probs=new_log_probs
+                    )
+                    current_draft = DraftTree(
+                        token_ids=new_ids,
+                        topology_map=new_topo,
+                        proto_nodes=proto_nodes,
+                        round_idx=speculative_draft.round_idx,
+                    )
+                    logger.info(
+                        "Speculation HIT at round %d — reusing draft N+1 "
+                        "(pruned to children of root %d, %d→%d nodes)",
+                        round_idx,
+                        matched_root_idx,
+                        len(old_ids),
+                        len(new_ids),
+                    )
             else:
                 current_draft = speculative_draft
-                logger.info("Speculation HIT at round %d — reusing draft N+1", round_idx)
+                logger.info(
+                    "Speculation HIT at round %d — reusing draft N+1",
+                    round_idx,
+                )
         else:
             # ❌ Speculation miss.  The speculative draft was computed
             # from an incorrect context.  Discard it and re-draft.

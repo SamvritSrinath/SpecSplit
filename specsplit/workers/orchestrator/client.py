@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import concurrent.futures
 import inspect
 import logging
 import os
@@ -64,6 +65,7 @@ class Orchestrator:
         self._draft_stub: spec_decoding_pb2_grpc.DraftServiceStub | None = None
         self._target_stub: spec_decoding_pb2_grpc.TargetServiceStub | None = None
         self._tokenizer: Any = None
+        self._sync_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
         logger.info(
             "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s, max_draft=%d, draft_temp=%.2f)",
@@ -199,9 +201,9 @@ class Orchestrator:
         Creates a new event loop and runs the async method to completion.
         Use this from non-async callers (CLI, benchmarks, etc.).
 
-        Use this from non-async callers (CLI, benchmarks, etc.).
-        Note that establishing a single event loop per orchestrator prevents
-        leaking and crashing gRPC components tied to differing loop lifetimes.
+        When called from an async context (FastAPI, Jupyter), runs the pipeline
+        in a dedicated thread with its own loop to avoid "event loop already
+        running" deadlock.
 
         Args:
             prompt: The user's input text prompt.
@@ -209,16 +211,30 @@ class Orchestrator:
         Returns:
             A tuple of (generated output text, PipelineResult with full metrics).
         """
-        # Reuse the same event loop across calls so gRPC channels stay bound correctly.
         try:
-            loop = asyncio.get_running_loop()
+            asyncio.get_running_loop()
         except RuntimeError:
+            # No running loop — safe to use run_until_complete
             if self._loop is None or self._loop.is_closed():
                 self._loop = asyncio.new_event_loop()
                 asyncio.set_event_loop(self._loop)
-            loop = self._loop
+            return self._loop.run_until_complete(self.run_with_result(prompt))
 
-        return loop.run_until_complete(self.run_with_result(prompt))
+        # Already inside an async context — run in a dedicated thread to avoid
+        # "This event loop is already running" from run_until_complete.
+        def _run_in_thread() -> tuple[str, PipelineResult]:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self.run_with_result(prompt))
+            finally:
+                loop.close()
+
+        if self._sync_executor is None:
+            self._sync_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="orchestrator-sync"
+            )
+        return self._sync_executor.submit(_run_in_thread).result()
 
     def run(self, prompt: str) -> str:
         """Run the pipeline and return the generated text.

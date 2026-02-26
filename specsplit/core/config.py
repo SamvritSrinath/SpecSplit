@@ -133,6 +133,12 @@ class TargetWorkerConfig(BaseSettings):
         "Sessions not accessed within this period are garbage-collected "
         "to free GPU memory from zombie connections.",
     )
+    attn_implementation: str = Field(
+        default="sdpa",
+        description="Attention implementation: 'sdpa' or 'eager' to support "
+        "4D causal tree masks. Flash Attention 2 does not support custom "
+        "masks and causes context leakage between sibling branches.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_TARGET_"}
 

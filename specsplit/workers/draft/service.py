@@ -37,6 +37,8 @@ def _to_proto_node(node: TokenNode) -> spec_decoding_pb2.TokenNode:
         token_id=node.token_id,
         log_prob=node.log_prob,
         children=[_to_proto_node(c) for c in node.children],
+        top_k_token_ids=node.top_k_token_ids,
+        top_k_probs=node.top_k_probs,
     )
 
 
@@ -97,13 +99,14 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
             prompt_ids: list[int] = list(request.prompt_token_ids)
             sw = Stopwatch()
             sw.start()
-            # Use request values; proto default 0.0 for temperature.
-            # Fix Bug 5: proto3 defaults unset float to 0.0, so request.temperature >= 0
-            # is always true. Use temp > 0 to mean "use request"; else None → use
-            # config.temperature (SPECSPLIT_DRAFT_TEMPERATURE env var).
+            # Use request values. For temperature: proto3 optional + HasField
+            # distinguish explicit 0 (greedy) from unset (use config default).
             k = request.max_draft_len if request.max_draft_len > 0 else None
             num_beams = request.num_beams if request.num_beams > 0 else None
-            temp = request.temperature if request.temperature > 0 else None
+            if getattr(request, "HasField", lambda _: False)("temperature"):
+                temp = request.temperature  # Explicit: 0 = greedy, >0 = stochastic
+            else:
+                temp = None  # Unset: use config.temperature
 
             roots: list[TokenNode] = self._engine.generate_draft_tree(
                 prompt_ids=prompt_ids,

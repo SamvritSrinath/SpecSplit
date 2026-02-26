@@ -41,13 +41,19 @@ Only ``[:, :, :, :seq_len, :]`` contains meaningful data.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 import torch
 
 logger = logging.getLogger(__name__)
 
+try:
+    from transformers.cache_utils import Cache as HFCache
+except ImportError:
+    HFCache = None  # type: ignore[misc, assignment]
 
-class StaticKVCache:
+
+class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore[misc]
     """Pre-allocated, pointer-based KV cache for a single session.
 
     Allocates fixed-size key and value buffers at initialization.
@@ -94,6 +100,10 @@ class StaticKVCache:
         dtype: torch.dtype = torch.float16,
         device: torch.device | str = "cpu",
     ) -> None:
+        if HFCache is not None:
+            super().__init__(layers=[])  # Bypass HF layers; we override update()
+        elif not hasattr(self, "layers"):  # Fallback when transformers absent
+            self.layers = []
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.max_seq_len = max_seq_len
@@ -430,6 +440,75 @@ class StaticKVCache:
         """
         self._seq_len = 0
         logger.debug("KV cache reset to empty (buffers retained)")
+
+    # ------------------------------------------------------------------ #
+    # HuggingFace Cache interface — native in-place updates (no torch.cat)
+    # ------------------------------------------------------------------ #
+
+    def update(
+        self,
+        key_states: torch.Tensor,
+        value_states: torch.Tensor,
+        layer_idx: int,
+        cache_kwargs: dict[str, Any] | None = None,
+    ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update the cache in-place. Called by HuggingFace attention layers.
+
+        Writes key/value states directly into the pre-allocated buffers via
+        slice assignment or index_copy_. No torch.cat, no reallocation.
+
+        Args:
+            key_states: [batch, num_heads, new_len, head_dim]
+            value_states: Same shape.
+            layer_idx: Layer index.
+            cache_kwargs: May contain "cache_position" tensor of write indices.
+
+        Returns:
+            (keys, values) for this layer, shape [batch, num_heads, seq_len, head_dim].
+        """
+        new_len = key_states.shape[2]
+        cache_kwargs = cache_kwargs or {}
+        cache_position = cache_kwargs.get("cache_position")
+
+        # Layer slice: [batch, num_heads, max_seq_len, head_dim]
+        k_slice = self.key_cache[layer_idx]
+        v_slice = self.value_cache[layer_idx]
+
+        if cache_position is not None:
+            if not isinstance(cache_position, torch.Tensor):
+                cache_position = torch.tensor(
+                    cache_position, dtype=torch.long, device=key_states.device
+                )
+            try:
+                k_slice.index_copy_(2, cache_position, key_states)
+                v_slice.index_copy_(2, cache_position, value_states)
+            except NotImplementedError:
+                k_slice[:, :, cache_position] = key_states
+                v_slice[:, :, cache_position] = value_states
+            self._seq_len = int(cache_position.max().item()) + 1
+        else:
+            # Contiguous append
+            end = self._seq_len + new_len
+            k_slice[:, :, self._seq_len : end, :] = key_states
+            v_slice[:, :, self._seq_len : end, :] = value_states
+            self._seq_len = end
+
+        return (
+            k_slice[:, :, : self._seq_len, :],
+            v_slice[:, :, : self._seq_len, :],
+        )
+
+    def get_seq_length(self, layer_idx: int = 0) -> int:
+        """Return the number of cached positions (Cache interface)."""
+        return self._seq_len
+
+    def crop(self, max_length: int) -> None:
+        """Crop cache to max_length (Cache interface, maps to rollback)."""
+        self.rollback(max_length)
+
+    def batch_select_indices(self, indices: torch.Tensor) -> None:
+        """Keep only specified positions (Cache interface, maps to compact)."""
+        self.compact(indices.cpu().tolist())
 
     # ------------------------------------------------------------------ #
     # Repr

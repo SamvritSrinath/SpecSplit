@@ -45,6 +45,13 @@ from specsplit.workers.target.tree_attn import (
 logger = logging.getLogger(__name__)
 
 
+class CacheDesyncError(RuntimeError):
+    """Raised when target cache length disagrees with orchestrator's expected_prefix_length.
+
+    The orchestrator must retry with full prompt_token_ids to rebuild the cache.
+    """
+
+
 # =============================================================================
 # Data Classes
 # =============================================================================
@@ -127,25 +134,25 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
     return None
 
 
-def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int], list[float]]:
+def _flatten_tree(
+    draft_tree: list[dict[str, Any]], vocab_size: int, device: torch.device, dtype: torch.dtype
+) -> tuple[list[int], list[int], list[float], list[torch.Tensor] | None]:
     """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
 
-    Performs a BFS/DFS traversal of the tree and assigns contiguous indices
-    to each node.
-
-    Args:
-        draft_tree: List of root node dicts (from ``TokenNode.to_dict()``).
-            Each dict has keys ``token_id``, ``log_prob``, ``children``.
+    Performs a BFS traversal of the tree and assigns contiguous indices to each node.
+    When nodes have top_k_token_ids/top_k_probs, builds full draft distribution
+    for correct residual sampling.
 
     Returns:
-        A ``(token_ids, topology_map)`` tuple where:
-        - ``token_ids[i]`` is the token ID of tree node ``i``.
-        - ``topology_map[i]`` is the parent index of node ``i``
-          (``-1`` for roots).
+        (token_ids, topology_map, log_probs, draft_probs_full or None).
+        draft_probs_full is a list of [vocab_size] tensors per node when top-k
+        data is present; None otherwise (legacy single log_prob per node).
     """
     token_ids: list[int] = []
     topology_map: list[int] = []
     log_probs: list[float] = []
+    draft_probs_full: list[torch.Tensor] = []
+    has_top_k = False
 
     queue: deque[tuple[dict[str, Any], int]] = deque()
     for root in draft_tree:
@@ -158,10 +165,30 @@ def _flatten_tree(draft_tree: list[dict[str, Any]]) -> tuple[list[int], list[int
         topology_map.append(parent_idx)
         log_probs.append(node.get("log_prob", 0.0))
 
+        top_k_ids = node.get("top_k_token_ids", [])
+        top_k_vals = node.get("top_k_probs", [])
+        probs = torch.zeros(vocab_size, dtype=dtype, device=device)
+        if top_k_ids and top_k_vals:
+            has_top_k = True
+            # Batched scatter: avoid per-element CPU-GPU sync from probs[tid]=float(p).
+            valid_pairs = [
+                (tid, float(p)) for tid, p in zip(top_k_ids, top_k_vals)
+                if 0 <= tid < vocab_size
+            ]
+            if valid_pairs:
+                indices = torch.tensor(
+                    [p[0] for p in valid_pairs], dtype=torch.long, device=device
+                )
+                values = torch.tensor(
+                    [p[1] for p in valid_pairs], dtype=dtype, device=device
+                )
+                probs.scatter_(0, indices, values)
+        draft_probs_full.append(probs)
+
         for child in node.get("children", []):
             queue.append((child, current_idx))
 
-    return token_ids, topology_map, log_probs
+    return token_ids, topology_map, log_probs, draft_probs_full if has_top_k else None
 
 
 # =============================================================================
@@ -199,6 +226,9 @@ class TargetEngine:
         # for the same session are serialized to avoid cache/next_root_logit races.
         self._session_caches: OrderedDict[str, KVCacheState] = OrderedDict()
         self._session_locks: dict[str, threading.Lock] = {}
+        # Global lock for _session_caches dict to prevent RuntimeError when
+        # TTL GC iterates while gRPC threads modify it (move_to_end, pop).
+        self._session_dict_lock: threading.Lock = threading.Lock()
 
         # D3: Session TTL garbage collection
         self._session_ttl_seconds = self.config.session_ttl_seconds
@@ -237,22 +267,16 @@ class TargetEngine:
             AutoModelForCausalLM.from_pretrained(
                 self.config.model_name,
                 torch_dtype=torch.float16,
+                attn_implementation=self.config.attn_implementation,
             )
             .to(self.device)
             .eval()
         )
 
         self._is_loaded = True
-
-        # D2: Detect Flash Attention 2 — 4D custom masks are incompatible
-        attn_impl = getattr(self._model.config, '_attn_implementation', None)
-        if attn_impl == 'flash_attention_2':
-            self._use_4d_mask = False
-            logger.warning(
-                "Flash Attention 2 detected — disabling 4D tree attention mask. "
-                "Position IDs will still encode tree structure, but the custom "
-                "attention pattern will not be enforced."
-            )
+        # attn_implementation from config (default "sdpa") ensures 4D causal
+        # tree masks are supported; FA2 would cause sibling context leakage.
+        self._use_4d_mask = True
 
         logger.info("Target model loaded: %s on %s", self.config.model_name, self.device)
 
@@ -307,33 +331,34 @@ class TargetEngine:
             A ``(cache_state, cache_hit)`` tuple.  ``cache_hit`` is True
             if an existing cache was found.
         """
-        if session_id in self._session_caches:
-            # Move to end to mark as recently used (LRU)
-            self._session_caches.move_to_end(session_id)
-            cache = self._session_caches[session_id]
-            cache.last_accessed = time.time()  # D3: touch timestamp
-            logger.debug(
-                "Session cache hit: %s (seq_len=%d)",
-                session_id,
-                cache.seq_len,
-            )
-            return cache, True
+        with self._session_dict_lock:
+            if session_id in self._session_caches:
+                # Move to end to mark as recently used (LRU)
+                self._session_caches.move_to_end(session_id)
+                cache = self._session_caches[session_id]
+                cache.last_accessed = time.time()  # D3: touch timestamp
+                logger.debug(
+                    "Session cache hit: %s (seq_len=%d)",
+                    session_id,
+                    cache.seq_len,
+                )
+                return cache, True
 
-        # Enforce max-sessions limit with LRU eviction
-        if len(self._session_caches) >= self.config.max_sessions:
-            evict_id, _ = self._session_caches.popitem(last=False)  # Remove oldest (first)
-            self._session_locks.pop(evict_id, None)
-            logger.warning(
-                "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
-            )
+            # Enforce max-sessions limit with LRU eviction
+            if len(self._session_caches) >= self.config.max_sessions:
+                evict_id, _ = self._session_caches.popitem(last=False)  # Remove oldest (first)
+                self._session_locks.pop(evict_id, None)
+                logger.warning(
+                    "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
+                )
 
-        # Create a new session with a StaticKVCache
-        static_cache = self._create_static_cache() if self._is_loaded else None
-        cache = KVCacheState(cache=static_cache, last_accessed=time.time())
-        self._session_caches[session_id] = cache
-        self._session_locks[session_id] = threading.Lock()
-        logger.debug("Session cache created: %s", session_id)
-        return cache, False
+            # Create a new session with a StaticKVCache
+            static_cache = self._create_static_cache() if self._is_loaded else None
+            cache = KVCacheState(cache=static_cache, last_accessed=time.time())
+            self._session_caches[session_id] = cache
+            self._session_locks[session_id] = threading.Lock()
+            logger.debug("Session cache created: %s", session_id)
+            return cache, False
 
     def end_session(self, session_id: str) -> bool:
         """Terminate a session and free its KV cache from memory.
@@ -348,23 +373,24 @@ class TargetEngine:
         Returns:
             True if the session existed and was removed, False otherwise.
         """
-        lock = self._session_locks.get(session_id)
-        if lock is not None:
-            lock.acquire()
-        try:
-            cache = self._session_caches.pop(session_id, None)
-            if cache is not None:
-                # Explicitly delete tensors to free GPU memory
-                cache.cache = None
-                cache.next_root_logit = None
-                logger.info("Session ended and cache released: %s", session_id)
-                return True
-            logger.debug("Session not found (already ended?): %s", session_id)
-            return False
-        finally:
+        with self._session_dict_lock:
+            lock = self._session_locks.get(session_id)
             if lock is not None:
-                lock.release()
-            self._session_locks.pop(session_id, None)
+                lock.acquire()
+            try:
+                cache = self._session_caches.pop(session_id, None)
+                self._session_locks.pop(session_id, None)
+                if cache is not None:
+                    # Explicitly delete tensors to free GPU memory
+                    cache.cache = None
+                    cache.next_root_logit = None
+                    logger.info("Session ended and cache released: %s", session_id)
+                    return True
+                logger.debug("Session not found (already ended?): %s", session_id)
+                return False
+            finally:
+                if lock is not None:
+                    lock.release()
 
     @property
     def active_sessions(self) -> int:
@@ -391,16 +417,17 @@ class TargetEngine:
         """
         ttl = ttl_seconds if ttl_seconds is not None else self._session_ttl_seconds
         now = time.time()
-        stale_ids = [
-            sid for sid, cache in self._session_caches.items()
-            if (now - cache.last_accessed) > ttl
-        ]
-        for sid in stale_ids:
-            cache = self._session_caches.pop(sid, None)
-            self._session_locks.pop(sid, None)
-            if cache is not None:
-                cache.cache = None
-                cache.next_root_logit = None
+        with self._session_dict_lock:
+            stale_ids = [
+                sid for sid, cache in list(self._session_caches.items())
+                if (now - cache.last_accessed) > ttl
+            ]
+            for sid in stale_ids:
+                cache = self._session_caches.pop(sid, None)
+                self._session_locks.pop(sid, None)
+                if cache is not None:
+                    cache.cache = None
+                    cache.next_root_logit = None
         if stale_ids:
             logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(stale_ids), ttl, stale_ids)
         return len(stale_ids)
@@ -494,6 +521,7 @@ class TargetEngine:
         draft_tree: list[dict[str, Any]],
         session_id: str | None = None,
         temperature: float = 0.0,  # <-- Added temperature
+        expected_prefix_length: int = 0,
     ) -> VerificationResult:
         """Verify a draft token tree against the target model's distribution.
 
@@ -546,8 +574,11 @@ class TargetEngine:
                     cache_hit=cache_hit,
                 )
 
-            # --- Step 1: Flatten tree → (token_ids, topology_map) ---
-            flat_token_ids, topology_map, flat_log_probs = _flatten_tree(draft_tree)
+            # --- Step 1: Flatten tree → (token_ids, topology_map, log_probs, draft_probs_full) ---
+            vocab_size = self._model.config.vocab_size
+            flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = _flatten_tree(
+                draft_tree, vocab_size, self.device, self._model.dtype
+            )
             num_tree_nodes = len(flat_token_ids)
 
             # --- Step 2: Determine what to feed the model ---
@@ -555,9 +586,38 @@ class TargetEngine:
             past_kv = None
             prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
 
+            # Context desync guard: if orchestrator reports expected_prefix_length
+            # and our cache length disagrees, force rebuild to avoid gibberish logits.
+            if (
+                cache_hit
+                and expected_prefix_length > 0
+                and cache_state is not None
+                and cache_state.seq_len != expected_prefix_length
+            ):
+                if len(prompt_ids) < expected_prefix_length:
+                    raise CacheDesyncError(
+                        f"CACHE_EVICTED_DELTA_ONLY: target seq_len={cache_state.seq_len} != "
+                        f"expected_prefix_length={expected_prefix_length}. "
+                        "Received delta-only context; orchestrator must retry with full "
+                        "prompt_token_ids to rebuild the cache."
+                    )
+                logger.warning(
+                    "Cache desync: target seq_len=%d != expected_prefix_length=%d. "
+                    "Forcing cache flush and rebuild.",
+                    cache_state.seq_len,
+                    expected_prefix_length,
+                )
+                cache_hit = False
+                prefix_length = 0
+                past_kv = None
+                if cache_state.cache is not None:
+                    cache_state.cache.reset()
+                    cache_state.seq_len = 0
+
             if cache_hit and prefix_length > 0 and cache_state and cache_state.cache is not None:
-                # Cache hit: get KV tensors from StaticKVCache
-                past_kv = cache_state.cache.get_all_kv()
+                # Cache hit: pass StaticKVCache directly so model calls cache.update()
+                # in-place (no legacy_to_dynamic, no torch.cat reallocation).
+                past_kv = cache_state.cache
                 input_token_ids = flat_token_ids
             else:
                 # No cache (or first call): feed prompt + draft tokens
@@ -593,6 +653,8 @@ class TargetEngine:
             else:
                 attn_mask_float = None
 
+            # StaticKVCache is passed directly; model calls cache.update() in-place.
+            # Only convert legacy tuples (e.g. from mocks) to DynamicCache.
             if past_kv is not None and isinstance(past_kv, tuple):
                 past_kv = legacy_to_dynamic_cache(past_kv, self._model.config)
 
@@ -606,28 +668,11 @@ class TargetEngine:
                     use_cache=True,
                 )
 
-            # --- Step 5: Update session cache with StaticKVCache ---
+            # --- Step 5: Cache updated in-place by model (no extract/append) ---
             if cache_state is not None and cache_state.cache is not None:
-                # Convert HF output to 5D tensors and append to StaticKVCache
-                hf_past_kv = _to_legacy_cache(outputs.past_key_values)
-                if hf_past_kv is not None:
-                    # The HF model returns the FULL past_key_values including
-                    # what we fed in. We need only the NEW positions.
-                    full_seq_len = hf_past_kv[0][0].shape[2]
-                    new_start = cache_state.cache.seq_len
-                    new_token_count = full_seq_len - new_start
-
-                    if new_token_count > 0:
-                        # Extract only the new KV entries
-                        new_keys_list = [layer[0][:, :, new_start:, :] for layer in hf_past_kv]
-                        new_values_list = [layer[1][:, :, new_start:, :] for layer in hf_past_kv]
-                        new_keys = torch.stack(new_keys_list, dim=0)
-                        new_values = torch.stack(new_values_list, dim=0)
-                        cache_state.cache.append(new_keys, new_values)
-
-                    cache_state.seq_len = cache_state.cache.seq_len
-                else:
-                    cache_state.seq_len = 0
+                # StaticKVCache: model called cache.update() during forward.
+                # outputs.past_key_values is our cache (same object).
+                cache_state.seq_len = cache_state.cache.seq_len
 
             # --- Step 6: Extract tree-position logits and verify ---
             # all_logits[j] predicts the token at position j+1 (causal LM semantics).
@@ -665,15 +710,19 @@ class TargetEngine:
 
             # --- Task 3.3: Speculative Acceptance Routing ---
             if temperature > 0.0:
-                # Convert target logits to probabilities
                 target_probs = torch.softmax(tree_logits / temperature, dim=-1)
-                # Convert draft log_probs back to probabilities
-                draft_probs = torch.exp(torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device))
+                draft_probs = torch.exp(
+                    torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device)
+                )
+                draft_probs_full_stacked = None
+                if flat_draft_probs_full is not None:
+                    draft_probs_full_stacked = torch.stack(flat_draft_probs_full, dim=0)
                 result_data = verify_stochastic_tree(
                     draft_tokens=draft_tokens_tensor,
                     draft_probs=draft_probs,
                     target_probs=target_probs,
                     topology_map=topology_map,
+                    draft_probs_full=draft_probs_full_stacked,
                 )
             else:
                 # Fallback to pure greedy verification
@@ -721,10 +770,8 @@ class TargetEngine:
                 if correction is not None and correction >= 0:
                     correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
 
-                    # FIX: Wrap the correction cache as well
-                    corr_kv = cache_state.cache.get_all_kv() if cache_state.cache else None
-                    if corr_kv is not None and isinstance(corr_kv, tuple):
-                        corr_kv = legacy_to_dynamic_cache(corr_kv, self._model.config)
+                    # Pass StaticKVCache directly — model updates it in-place.
+                    corr_kv = cache_state.cache
 
                     with torch.no_grad():
                         correction_output = self._model(
@@ -732,21 +779,8 @@ class TargetEngine:
                             past_key_values=corr_kv,
                             use_cache=True,
                         )
-                    # Append correction token's KV to the StaticKVCache
-                    corr_hf = _to_legacy_cache(correction_output.past_key_values)
-                    if corr_hf is not None and cache_state.cache is not None:
-                        corr_full_len = corr_hf[0][0].shape[2]
-                        corr_start = cache_state.cache.seq_len
-                        corr_new = corr_full_len - corr_start
-                        if corr_new > 0:
-                            corr_keys = torch.stack(
-                                [layer[0][:, :, corr_start:, :] for layer in corr_hf], dim=0
-                            )
-                            corr_values = torch.stack(
-                                [layer[1][:, :, corr_start:, :] for layer in corr_hf], dim=0
-                            )
-                            cache_state.cache.append(corr_keys, corr_values)
-                        cache_state.seq_len = cache_state.cache.seq_len
+                    # Cache already updated in-place by model
+                    cache_state.seq_len = cache_state.cache.seq_len
                     cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
                 else:
                     if num_accepted > 0:

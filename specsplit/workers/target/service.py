@@ -16,7 +16,7 @@ import grpc
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
-from specsplit.workers.target.engine import TargetEngine
+from specsplit.workers.target.engine import CacheDesyncError, TargetEngine
 
 logger = logging.getLogger(__name__)
 
@@ -30,7 +30,7 @@ def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
     """Recursively convert a protobuf ``TokenNode`` to a plain Python dict.
 
     The dict format matches what ``TargetEngine.verify_draft_tree`` expects:
-    ``{"token_id": int, "log_prob": float, "children": [...]}``.
+    ``{"token_id": int, "log_prob": float, "children": [...], "top_k_token_ids": [], "top_k_probs": []}``.
 
     Args:
         node: A protobuf ``TokenNode`` message.
@@ -38,10 +38,14 @@ def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
     Returns:
         A plain dict representation of the node and its descendants.
     """
+    top_k_ids = list(node.top_k_token_ids) if node.top_k_token_ids else []
+    top_k_probs = list(node.top_k_probs) if node.top_k_probs else []
     return {
         "token_id": node.token_id,
         "log_prob": node.log_prob,
         "children": [_from_proto_node(c) for c in node.children],
+        "top_k_token_ids": top_k_ids,
+        "top_k_probs": top_k_probs,
     }
 
 
@@ -138,14 +142,24 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                     f"draft tree has {num_nodes} nodes, exceeds max_tree_nodes ({self._config.max_tree_nodes})",
                 )
 
+            expected_prefix_length = int(getattr(request, "expected_prefix_length", 0) or 0)
+
             sw = Stopwatch()
             sw.start()
-            result = self._engine.verify_draft_tree(
-                prompt_ids,
-                draft_tree,
-                session_id=session_id,
-                temperature=request.temperature,
-            )
+            try:
+                result = self._engine.verify_draft_tree(
+                    prompt_ids,
+                    draft_tree,
+                    session_id=session_id,
+                    temperature=request.temperature,
+                    expected_prefix_length=expected_prefix_length,
+                )
+            except CacheDesyncError as e:
+                sw.stop()
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    str(e),
+                )
             sw.stop()
 
             # Issue 8: Populate TelemetryMetadata with server-side timing

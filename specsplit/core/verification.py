@@ -290,6 +290,7 @@ def verify_stochastic_tree(
     draft_probs: torch.Tensor,
     target_probs: torch.Tensor,
     topology_map: list[int],
+    draft_probs_full: torch.Tensor | None = None,
 ) -> VerificationResult:
     """Perform stochastic verification with rejection sampling over the full tree.
 
@@ -302,9 +303,11 @@ def verify_stochastic_tree(
     Args:
         draft_tokens: [num_nodes] tensor of drafted token IDs.
         draft_probs: [num_nodes] tensor of probabilities the draft assigned to
-            the drafted token at each node.
+            the drafted token at each node (legacy; used when draft_probs_full=None).
         target_probs: [num_nodes, vocab_size] tensor of target model probabilities.
         topology_map: List mapping node index to parent index (-1 for root).
+        draft_probs_full: Optional [num_nodes, vocab_size] full draft distribution.
+            When present, residual = max(0, P_target - P_draft) for correct sampling.
 
     Returns:
         VerificationResult with the longest accepted path and sampled bonus token.
@@ -394,7 +397,30 @@ def verify_stochastic_tree(
     accepted_tokens = [draft_tokens[i].item() for i in best_path]
     if best_divergence_node >= 0:
         p_dist = target_probs[best_divergence_node]
-        bonus_token = torch.multinomial(p_dist, 1).item()
+        if best_diverged:
+            # Rejection: sample from normalized residual distribution.
+            # residual(t) = max(0, P_target(t) - P_draft(t)) for all tokens.
+            if draft_probs_full is not None:
+                q_dist = draft_probs_full[best_divergence_node]
+                residual_probs = torch.relu(p_dist - q_dist)
+            else:
+                # Legacy: only have p_draft at drafted token, assume 0 elsewhere.
+                draft_token_id = draft_tokens[best_divergence_node].item()
+                q_val = draft_probs[best_divergence_node]
+                residual_probs = p_dist.clone()
+                residual_probs[draft_token_id] = torch.relu(
+                    p_dist[draft_token_id] - q_val
+                )
+            residual_sum = residual_probs.sum()
+            if residual_sum > 0:
+                bonus_token = torch.multinomial(
+                    residual_probs / residual_sum, 1
+                ).item()
+            else:
+                bonus_token = torch.multinomial(p_dist, 1).item()
+        else:
+            # Fully accepted path: sample from target distribution at leaf
+            bonus_token = torch.multinomial(p_dist, 1).item()
     else:
         bonus_token = -1
     current_node = best_path[-1] if best_path else -1

@@ -33,6 +33,10 @@ from specsplit.core.telemetry import Stopwatch
 logger = logging.getLogger(__name__)
 
 
+# Top-K size for draft distribution (covers ~99% mass for residual sampling).
+_TOP_K_DRAFT_PROBS = 64
+
+
 @dataclass
 class TokenNode:
     """In-memory representation of a single node in the draft token tree."""
@@ -40,6 +44,8 @@ class TokenNode:
     token_id: int
     log_prob: float
     children: list[TokenNode] = field(default_factory=list)
+    top_k_token_ids: list[int] = field(default_factory=list)
+    top_k_probs: list[float] = field(default_factory=list)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize to a dict (mirrors the protobuf ``TokenNode`` message)."""
@@ -47,6 +53,8 @@ class TokenNode:
             "token_id": self.token_id,
             "log_prob": self.log_prob,
             "children": [c.to_dict() for c in self.children],
+            "top_k_token_ids": self.top_k_token_ids,
+            "top_k_probs": self.top_k_probs,
         }
 
 
@@ -286,8 +294,10 @@ class DraftEngine:
             # Heavy branching at root, reduce deeper to prevent exponential explosion.
             branching_factor = max(1, num_beams - depth)
 
-            # Collect all (parent_node, token_id, prob, past_kv) for this level
-            expansion_items: list[tuple[TokenNode | None, int, float, Any]] = []
+            # Collect all (parent_node, token_id, prob, past_kv, top_k_ids, top_k_probs)
+            expansion_items: list[
+                tuple[TokenNode | None, int, float, Any, list[int], list[float]]
+            ] = []
 
             with torch.no_grad():
                 for parent_node, entry_past_kv, entry_logits in current_level:
@@ -311,11 +321,32 @@ class DraftEngine:
                         )
                         top_probs = torch.gather(probs, -1, top_indices)
 
+                    # Top-K draft distribution for correct residual sampling.
+                    k_probs = min(_TOP_K_DRAFT_PROBS, entry_logits.shape[-1])
+                    if temperature == 0.0:
+                        probs_for_topk = torch.softmax(entry_logits, dim=-1)
+                    else:
+                        probs_for_topk = logits_to_probs(
+                            entry_logits, temperature=temperature
+                        )
+                    topk_probs, topk_idx = torch.topk(probs_for_topk, k_probs, dim=-1)
+                    topk_ids = topk_idx[0].cpu().tolist()
+                    topk_vals = topk_probs[0].cpu().tolist()
+
                     for b in range(branching_factor):
                         token_id_int = top_indices[0, b].item()
                         prob_val = max(top_probs[0, b].item(), 1e-10)
                         log_prob = math.log(prob_val)
-                        expansion_items.append((parent_node, token_id_int, log_prob, entry_past_kv))
+                        expansion_items.append(
+                            (
+                                parent_node,
+                                token_id_int,
+                                log_prob,
+                                entry_past_kv,
+                                topk_ids,
+                                topk_vals,
+                            )
+                        )
 
             if not expansion_items:
                 break
@@ -345,18 +376,22 @@ class DraftEngine:
                     else:
                         legacy_kvs.append(kv)
 
-                # 2. Stack the legacy tuples along the batch dimension
+                # 2. Vectorized batch: one stack over (beam, layer), then slice per layer.
+                # Replaces O(layers × 2) torch.cat calls with 2 stacks + native tensor slicing.
+                n_layers = len(legacy_kvs[0])
+                sample_k = legacy_kvs[0][0][0]
+                _, n_heads, seq_len, head_dim = sample_k.shape
+                flat_keys = [legacy_kvs[j][l][0] for j in range(total_items) for l in range(n_layers)]
+                flat_vals = [legacy_kvs[j][l][1] for j in range(total_items) for l in range(n_layers)]
+                keys_stack = torch.stack(flat_keys, dim=0).view(
+                    total_items, n_layers, 1, n_heads, seq_len, head_dim
+                )
+                vals_stack = torch.stack(flat_vals, dim=0).view(
+                    total_items, n_layers, 1, n_heads, seq_len, head_dim
+                )
                 batch_past_kv = tuple(
-                    tuple(
-                        torch.cat([
-                            legacy_kvs[j][layer_idx][t_idx]
-                            if legacy_kvs[j][layer_idx][t_idx].shape[0] == 1
-                            else legacy_kvs[j][layer_idx][t_idx][:1]
-                            for j in range(total_items)
-                        ], dim=0)
-                        for t_idx in range(2)  # key, value
-                    )
-                    for layer_idx in range(len(legacy_kvs[0]))
+                    (keys_stack[:, l].squeeze(1), vals_stack[:, l].squeeze(1))
+                    for l in range(n_layers)
                 )
 
                 # 3. Pass batched legacy tuple — HF models accept it; avoid DynamicCache
@@ -374,8 +409,15 @@ class DraftEngine:
             # step_out.past_key_values: batched KV cache
 
             # --- Phase 3: Unpack and create TokenNodes, populate next_level ---
-            for i, (parent_node, token_id_int, log_prob, _) in enumerate(expansion_items):
-                child_node = TokenNode(token_id=token_id_int, log_prob=log_prob)
+            for i, (parent_node, token_id_int, log_prob, _, topk_ids, topk_probs) in enumerate(
+                expansion_items
+            ):
+                child_node = TokenNode(
+                    token_id=token_id_int,
+                    log_prob=log_prob,
+                    top_k_token_ids=topk_ids,
+                    top_k_probs=topk_probs,
+                )
 
                 if parent_node is None:
                     roots.append(child_node)

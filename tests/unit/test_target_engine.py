@@ -109,13 +109,24 @@ def _make_mock_target_model(
             else:
                 logits[0, i, 0] = 10.0  # default: predict token 0
 
-        # Fake KV cache
+        # When given StaticKVCache, simulate in-place update and return it
+        if past_key_values is not None and hasattr(past_key_values, "append"):
+            new_len = seq_len
+            if new_len > 0:
+                keys = torch.zeros(2, batch, 4, new_len, 8)
+                values = torch.zeros(2, batch, 4, new_len, 8)
+                past_key_values.append(keys, values)
+            out = MagicMock()
+            out.logits = logits
+            out.past_key_values = past_key_values
+            return out
+
+        # Legacy path: fake tuple KV cache
         cache_len = seq_len
         if past_key_values is not None:
             if isinstance(past_key_values, tuple):
                 cache_len += past_key_values[0][0].shape[2]
             elif hasattr(past_key_values, "get_seq_length"):
-                # DynamicCache (modern transformers)
                 cache_len += past_key_values.get_seq_length()
             elif hasattr(past_key_values, "seq_len"):
                 cache_len += past_key_values.seq_len
@@ -150,6 +161,11 @@ def _make_mock_tokenizer() -> MagicMock:
 class TestFlattenTree:
     """Tests for the _flatten_tree helper."""
 
+    def _flatten(self, tree: list) -> tuple[list[int], list[int], list[float]]:
+        """Call _flatten_tree with test defaults and return first 3 values."""
+        result = _flatten_tree(tree, vocab_size=32000, device=torch.device("cpu"), dtype=torch.float32)
+        return result[0], result[1], result[2]
+
     def test_single_chain(self) -> None:
         """A linear chain should flatten to sequential indices."""
         tree = [
@@ -165,7 +181,7 @@ class TestFlattenTree:
                 ],
             }
         ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
+        token_ids, topology, log_probs = self._flatten(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 1]
         assert log_probs == [-0.1, -0.2, -0.3]
@@ -182,14 +198,14 @@ class TestFlattenTree:
                 ],
             }
         ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
+        token_ids, topology, log_probs = self._flatten(tree)
         assert token_ids == [10, 20, 30]
         assert topology == [-1, 0, 0]
         assert log_probs == [-0.1, -0.2, -0.3]
 
     def test_empty_tree(self) -> None:
         """An empty tree should produce empty lists."""
-        token_ids, topology, log_probs = _flatten_tree([])
+        token_ids, topology, log_probs = self._flatten([])
         assert token_ids == []
         assert topology == []
         assert log_probs == []
@@ -200,7 +216,7 @@ class TestFlattenTree:
             {"token_id": 10, "log_prob": -0.1, "children": []},
             {"token_id": 20, "log_prob": -0.2, "children": []},
         ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
+        token_ids, topology, log_probs = self._flatten(tree)
         assert token_ids == [10, 20]
         assert topology == [-1, -1]
         assert log_probs == [-0.1, -0.2]
