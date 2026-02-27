@@ -417,20 +417,30 @@ class TargetEngine:
         """
         ttl = ttl_seconds if ttl_seconds is not None else self._session_ttl_seconds
         now = time.time()
+        purged_ids: list[str] = []
         with self._session_dict_lock:
             stale_ids = [
                 sid for sid, cache in list(self._session_caches.items())
                 if (now - cache.last_accessed) > ttl
             ]
             for sid in stale_ids:
-                cache = self._session_caches.pop(sid, None)
-                self._session_locks.pop(sid, None)
-                if cache is not None:
-                    cache.cache = None
-                    cache.next_root_logit = None
-        if stale_ids:
-            logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(stale_ids), ttl, stale_ids)
-        return len(stale_ids)
+                lock = self._session_locks.get(sid)
+                if lock is not None and not lock.acquire(blocking=False):
+                    # Session is actively in verify_draft_tree; skip this cycle.
+                    continue
+                try:
+                    cache = self._session_caches.pop(sid, None)
+                    self._session_locks.pop(sid, None)
+                    if cache is not None:
+                        cache.cache = None
+                        cache.next_root_logit = None
+                    purged_ids.append(sid)
+                finally:
+                    if lock is not None:
+                        lock.release()
+        if purged_ids:
+            logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(purged_ids), ttl, purged_ids)
+        return len(purged_ids)
 
     # --------------------------------------------------------------------- #
     # KV Cache rollback
@@ -629,21 +639,13 @@ class TargetEngine:
             # Shape: [1, input_len]
 
             # --- Step 3: Build tree-attention mask ---
+            # Cache hit: allocate only [num_tree_nodes, total_len] (avoids O(total_len²))
             attn_mask_bool, position_ids = build_tree_attention(
                 topology_map=topology_map,
                 prefix_length=prefix_length,
                 device=self.device,
+                tree_rows_only=(past_kv is not None),
             )
-            # attn_mask_bool shape: [1, 1, total_len, total_len]
-            # position_ids shape: [1, total_len]
-
-            # When using KV cache, we only need the query rows for the
-            # new tokens (the prefix is already cached)
-            if past_kv is not None:
-                # Slice to only the new input tokens' rows
-                new_len = len(input_token_ids)
-                attn_mask_bool = attn_mask_bool[:, :, -new_len:, :]
-                position_ids = position_ids[:, -new_len:]
 
             # D2: Flash Attention 2 is incompatible with 4D custom masks.
             # When FA2 is active, skip the mask entirely (position_ids still
@@ -668,10 +670,14 @@ class TargetEngine:
                     use_cache=True,
                 )
 
-            # --- Step 5: Cache updated in-place by model (no extract/append) ---
+            # --- Step 5: Update session cache ---
             if cache_state is not None and cache_state.cache is not None:
-                # StaticKVCache: model called cache.update() during forward.
-                # outputs.past_key_values is our cache (same object).
+                if past_kv is None:
+                    # Init miss: model returned a new HF cache; inject into StaticKVCache.
+                    hf_past_kv = _to_legacy_cache(outputs.past_key_values)
+                    if hf_past_kv is not None:
+                        new_keys, new_values = StaticKVCache.stack_hf_cache(hf_past_kv)
+                        cache_state.cache.append(new_keys, new_values)
                 cache_state.seq_len = cache_state.cache.seq_len
 
             # --- Step 6: Extract tree-position logits and verify ---

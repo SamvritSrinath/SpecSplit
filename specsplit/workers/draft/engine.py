@@ -224,37 +224,66 @@ class DraftEngine:
         """Core generation logic operating on a specific cache state.
 
         This method is always called under the session lock (if applicable).
+        Uses longest-common-prefix matching for O(1) rollback on speculation miss.
         """
         # -----------------------------------------------------------------
-        # Encode the prompt prefix (with cross-round KV cache reuse)
+        # Encode the prompt prefix (LCP matching for O(1) rollback on miss)
         # -----------------------------------------------------------------
-        # Issue 6: Validate cached token IDs match, not just length
-        prefix_matches = (
-            cache_state.kv_cache is not None
-            and len(prompt_ids) >= cache_state.cached_prompt_len
-            and cache_state.cached_prompt_len > 0
-            and prompt_ids[: cache_state.cached_prompt_len] == cache_state.cached_prompt_ids
-        )
+        match_len = 0
+        if cache_state.kv_cache is not None and cache_state.cached_prompt_len > 0:
+            min_len = min(len(prompt_ids), cache_state.cached_prompt_len)
+            while match_len < min_len and (
+                prompt_ids[match_len] == cache_state.cached_prompt_ids[match_len]
+            ):
+                match_len += 1
 
-        if prefix_matches:
-            new_ids = prompt_ids[cache_state.cached_prompt_len :]
-            if new_ids:
-                # Case B: context grew — extend from cached KV with only the new tokens
+        if match_len == len(prompt_ids) and match_len == cache_state.cached_prompt_len:
+            # Case A: Exact match — O(1) reuse, no forward pass needed.
+            past_kv = cache_state.kv_cache
+            last_logits = cache_state.cached_last_logits
+        elif match_len > 0:
+            # Case B: Extension or rollback — crop to match_len-1, process tail.
+            # One-token forward generates last_logits while reusing prefix cache.
+            reuse_len = match_len - 1
+            if reuse_len == 0:
+                # No prefix to reuse; fall through to full recompute.
+                past_kv = None
+                new_ids = prompt_ids
+            else:
+                past_kv = cache_state.kv_cache
+
+                if cache_state.cached_prompt_len > reuse_len:
+                    if hasattr(past_kv, "crop"):
+                        past_kv.crop(reuse_len)
+                    elif isinstance(past_kv, tuple):
+                        past_kv = tuple(
+                            (k[:, :, :reuse_len, :], v[:, :, :reuse_len, :])
+                            for k, v in past_kv
+                        )
+
+                new_ids = prompt_ids[reuse_len:]
+
+            if past_kv is None:
+                # reuse_len was 0; full recompute.
                 new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
                 with torch.no_grad():
                     prefix_out = self._model(
                         input_ids=new_input,
-                        past_key_values=cache_state.kv_cache,
+                        past_key_values=None,
                         use_cache=True,
                     )
-                past_kv = prefix_out.past_key_values
-                last_logits = prefix_out.logits[:, -1, :]
             else:
-                # Case C: exact match — reuse stored KV and logits, no forward pass needed
-                past_kv = cache_state.kv_cache
-                last_logits = cache_state.cached_last_logits
+                new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
+                with torch.no_grad():
+                    prefix_out = self._model(
+                        input_ids=new_input,
+                        past_key_values=past_kv,
+                        use_cache=True,
+                    )
+            past_kv = prefix_out.past_key_values
+            last_logits = prefix_out.logits[:, -1, :]
         else:
-            # Case A: no cache, stale, or mismatched prompt — full prefix recompute
+            # Case C: Complete mismatch or empty cache — full O(N) recompute.
             input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
             with torch.no_grad():
                 prefix_out = self._model(
@@ -291,8 +320,13 @@ class DraftEngine:
             next_level_entries: list[tuple[TokenNode, Any, torch.Tensor]] = []
 
             # Dynamic Branching Topology:
-            # Heavy branching at root, reduce deeper to prevent exponential explosion.
-            branching_factor = max(1, num_beams - depth)
+            # Greedy (T=0): branching_factor must be 1 — secondary beams have P=0
+            # and would always reject on target; branching is mathematically invalid.
+            # Stochastic: reduce branching deeper to prevent exponential explosion.
+            if temperature == 0.0:
+                branching_factor = 1
+            else:
+                branching_factor = max(1, num_beams - depth)
 
             # Collect all (parent_node, token_id, prob, past_kv, top_k_ids, top_k_probs)
             expansion_items: list[
@@ -322,9 +356,11 @@ class DraftEngine:
                         top_probs = torch.gather(probs, -1, top_indices)
 
                     # Top-K draft distribution for correct residual sampling.
+                    # Use one-hot when greedy; residual = relu(P_target - P_draft) must
+                    # reflect the actual sampling distribution (one-hot for greedy).
                     k_probs = min(_TOP_K_DRAFT_PROBS, entry_logits.shape[-1])
                     if temperature == 0.0:
-                        probs_for_topk = torch.softmax(entry_logits, dim=-1)
+                        probs_for_topk = logits_to_probs(entry_logits, temperature=0.0)
                     else:
                         probs_for_topk = logits_to_probs(
                             entry_logits, temperature=temperature

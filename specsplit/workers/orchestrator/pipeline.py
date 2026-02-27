@@ -658,6 +658,10 @@ async def run_speculative_loop_async(
         # Extract the longest path to form our speculation assumption,
         # avoiding sending a flat multi-branch tree to the draft context.
         assumed_path = _get_longest_path(current_draft)
+        # Do not speculate beyond EOS — truncate path and skip draft RPC if it ends at EOS.
+        if eos_token_id is not None and eos_token_id in assumed_path:
+            eos_idx = assumed_path.index(eos_token_id)
+            assumed_path = assumed_path[: eos_idx + 1]
         speculative_context = current_context + assumed_path
         speculative_assumption = assumed_path
 
@@ -685,17 +689,29 @@ async def run_speculative_loop_async(
             )
         )
 
-        # Speculatively draft N+1 while N is being verified
-        speculative_draft_task = asyncio.create_task(
-            _call_generate_drafts(
-                draft_stub,
-                prompt_ids,
-                speculative_context,
-                cfg,
-                round_idx=round_idx + 1,
-                session_id=session_id,
+        # Speculatively draft N+1 while N is being verified.
+        # Skip draft RPC if path ends at EOS (nothing useful to speculate).
+        if eos_token_id is not None and assumed_path and assumed_path[-1] == eos_token_id:
+            async def _noop_draft() -> _RpcResult[DraftTree]:
+                return _RpcResult(
+                    value=DraftTree(
+                        token_ids=[], topology_map=[], proto_nodes=[], round_idx=round_idx + 1
+                    ),
+                    elapsed_ms=0.0,
+                )
+
+            speculative_draft_task = asyncio.create_task(_noop_draft())
+        else:
+            speculative_draft_task = asyncio.create_task(
+                _call_generate_drafts(
+                    draft_stub,
+                    prompt_ids,
+                    speculative_context,
+                    cfg,
+                    round_idx=round_idx + 1,
+                    session_id=session_id,
+                )
             )
-        )
 
         # Wait for BOTH to complete (they run concurrently)
         # Issue 9: Catch DEADLINE_EXCEEDED from either RPC
@@ -913,8 +929,7 @@ async def run_speculative_loop_async(
                         "re-drafting from corrected context",
                         round_idx,
                     )
-                    if session_id is not None:
-                        await _call_flush_target_cache(target_stub, session_id)
+                    # Target has already rolled back to accepted prefix; no flush needed.
                     with telemetry.span("re_draft", round_idx=round_idx):
                         try:
                             re_draft_rpc = await _call_generate_drafts(
@@ -923,7 +938,6 @@ async def run_speculative_loop_async(
                                 current_context,
                                 cfg,
                                 round_idx=round_idx + 1,
-                                reset_cache=True,
                                 session_id=session_id,
                             )
                         except grpc.aio.AioRpcError as e:
@@ -997,12 +1011,10 @@ async def run_speculative_loop_async(
                 len(speculative_assumption),
             )
 
-            # Send flush signal to Target Worker to clear its speculative cache (no-op when stateless)
-            if session_id is not None:
-                await _call_flush_target_cache(target_stub, session_id)
+            # Target has already rolled back to accepted prefix. Draft engine uses
+            # LCP cache slicing for O(1) rollback — no reset_cache needed.
 
-            # Re-draft from the CORRECTED context, with reset_cache=True
-            # to invalidate the draft engine's stale cross-round KV cache.
+            # Re-draft from the CORRECTED context
             with telemetry.span("re_draft", round_idx=round_idx):
                 try:
                     re_draft_rpc = await _call_generate_drafts(
@@ -1011,7 +1023,6 @@ async def run_speculative_loop_async(
                         current_context,
                         cfg,
                         round_idx=round_idx + 1,
-                        reset_cache=True,
                         session_id=session_id,
                     )
                 except grpc.aio.AioRpcError as e:

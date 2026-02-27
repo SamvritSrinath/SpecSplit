@@ -113,10 +113,12 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
         self.device = torch.device(device) if isinstance(device, str) else device
 
         # -----------------------------------------------------------------
-        # Pre-allocate the full KV buffers — filled with zeros.
+        # Pre-allocate the full KV buffers (empty — no zeroing).
+        # _seq_len tracks valid data; retrieval only reads [:seq_len].
+        # Zeroing would synchronously write ~2GB for 7B/4K, providing no benefit.
         # Shape: [num_layers, batch_size, num_heads, max_seq_len, head_dim]
         # -----------------------------------------------------------------
-        self.key_cache: torch.Tensor = torch.zeros(
+        self.key_cache: torch.Tensor = torch.empty(
             num_layers,
             batch_size,
             num_heads,
@@ -125,7 +127,7 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             dtype=dtype,
             device=self.device,
         )
-        self.value_cache: torch.Tensor = torch.zeros(
+        self.value_cache: torch.Tensor = torch.empty(
             num_layers,
             batch_size,
             num_heads,
@@ -485,13 +487,17 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             except NotImplementedError:
                 k_slice[:, :, cache_position] = key_states
                 v_slice[:, :, cache_position] = value_states
-            self._seq_len = int(cache_position.max().item()) + 1
+            if layer_idx == self.num_layers - 1:
+                self._seq_len = int(cache_position.max().item()) + 1
         else:
-            # Contiguous append
-            end = self._seq_len + new_len
-            k_slice[:, :, self._seq_len : end, :] = key_states
-            v_slice[:, :, self._seq_len : end, :] = value_states
-            self._seq_len = end
+            # Contiguous append. Only advance _seq_len on last layer to avoid
+            # corrupting subsequent layers (they would write to wrong offsets).
+            start = self._seq_len
+            end = start + new_len
+            k_slice[:, :, start:end, :] = key_states
+            v_slice[:, :, start:end, :] = value_states
+            if layer_idx == self.num_layers - 1:
+                self._seq_len = end
 
         return (
             k_slice[:, :, : self._seq_len, :],

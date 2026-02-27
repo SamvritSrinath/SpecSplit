@@ -75,6 +75,7 @@ def build_tree_attention(
     topology_map: list[int],
     prefix_length: int,
     device: torch.device | str = "cpu",
+    tree_rows_only: bool = False,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     """Build a causal tree-attention mask and position IDs tensor.
 
@@ -86,16 +87,16 @@ def build_tree_attention(
         prefix_length: Number of prefix tokens already in the KV cache.
             These positions are always attended to by every tree node.
         device: Torch device for the output tensors.
+        tree_rows_only: If True, allocate only [num_tree_nodes, total_len] mask
+            (for cache hit when only tree rows are needed). Avoids O(total_len²)
+            allocation when 99%+ would be discarded by slicing.
 
     Returns:
         A tuple ``(attention_mask, position_ids)`` where:
         - ``attention_mask``: ``torch.bool`` tensor of shape
-          ``[1, 1, total_len, total_len]`` (broadcastable over batch and
-          heads).  ``True`` = allowed to attend, ``False`` = masked out.
-          The 4D shape is what HuggingFace ``AutoModelForCausalLM``
-          expects for custom attention masks.
-        - ``position_ids``: ``torch.long`` tensor of shape ``[1, total_len]``.
-          Siblings at the same tree depth share the same position ID.
+          ``[1, 1, Q, total_len]`` with Q = num_tree_nodes if tree_rows_only
+          else total_len. ``True`` = allowed to attend.
+        - ``position_ids``: ``torch.long`` tensor of shape ``[1, Q]``.
 
     Raises:
         ValueError: If ``topology_map`` contains an out-of-range parent
@@ -103,19 +104,14 @@ def build_tree_attention(
     """
     num_tree_nodes = len(topology_map)
     total_len = prefix_length + num_tree_nodes
-    # Shape: [total_len, total_len]  (will be unsqueezed to 4D at the end)
 
     # ------------------------------------------------------------------
     # Step 1: Compute each node's depth and ancestor set
     # ------------------------------------------------------------------
-    # depths[i] = depth of tree node i (root = 0)
     depths: list[int] = [0] * num_tree_nodes
-    # ancestors[i] = set of LOCAL tree-node indices that are ancestors of i
-    # (including i itself)
     ancestors: list[set[int]] = [set() for _ in range(num_tree_nodes)]
 
     for i in range(num_tree_nodes):
-        # Walk up the parent chain to compute depth and ancestor set
         visited: set[int] = set()
         cur = i
         depth = 0
@@ -142,69 +138,65 @@ def build_tree_attention(
         ancestors[i] = set(chain)
 
     # ------------------------------------------------------------------
-    # Step 2: Build the 2D boolean attention mask
+    # Step 2: Build the attention mask (sparse or full)
     # ------------------------------------------------------------------
-    # Start with a standard causal mask for the prefix (lower-triangular)
-    # and then fill in the tree portion.
-    #
-    # Convention: mask[i, j] = True  means position i CAN attend to position j.
-    mask = torch.zeros(total_len, total_len, dtype=torch.bool, device=device)
-    # Shape: [total_len, total_len]
-
-    # (a) Prefix self-attention: standard causal (lower-triangular)
-    if prefix_length > 0:
-        prefix_causal = torch.tril(
-            torch.ones(prefix_length, prefix_length, dtype=torch.bool, device=device)
-        )
-        # Shape: [prefix_length, prefix_length]
-        mask[:prefix_length, :prefix_length] = prefix_causal
-
-    # (b) Tree nodes attending to prefix: every tree node sees the full prefix
-    if prefix_length > 0 and num_tree_nodes > 0:
-        # mask[prefix_length:, :prefix_length] = True
-        mask[prefix_length:, :prefix_length] = True
-        # Shape of region: [num_tree_nodes, prefix_length]
-
-    # (c) Tree nodes attending to other tree nodes (including self):
-    # node i attends to node j IFF j ∈ ancestors[i]
-    for i in range(num_tree_nodes):
-        row = prefix_length + i  # Global position of tree node i
-        for anc in ancestors[i]:
-            col = prefix_length + anc  # Global position of ancestor
-            mask[row, col] = True
+    if tree_rows_only and num_tree_nodes > 0:
+        # Only allocate rows for tree nodes — avoids O(total_len²) when
+        # cache hit would slice to last num_tree_nodes rows anyway.
+        mask = torch.zeros(num_tree_nodes, total_len, dtype=torch.bool, device=device)
+        for i in range(num_tree_nodes):
+            if prefix_length > 0:
+                mask[i, :prefix_length] = True
+            for anc in ancestors[i]:
+                mask[i, prefix_length + anc] = True
+        num_rows = num_tree_nodes
+        position_ids_len = num_tree_nodes
+    else:
+        # Full mask: prefix causal + tree portion
+        mask = torch.zeros(total_len, total_len, dtype=torch.bool, device=device)
+        if prefix_length > 0:
+            prefix_causal = torch.tril(
+                torch.ones(prefix_length, prefix_length, dtype=torch.bool, device=device)
+            )
+            mask[:prefix_length, :prefix_length] = prefix_causal
+        if prefix_length > 0 and num_tree_nodes > 0:
+            mask[prefix_length:, :prefix_length] = True
+        for i in range(num_tree_nodes):
+            row = prefix_length + i
+            for anc in ancestors[i]:
+                mask[row, prefix_length + anc] = True
+        num_rows = total_len
+        position_ids_len = total_len
 
     # ------------------------------------------------------------------
     # Step 3: Build position IDs
     # ------------------------------------------------------------------
-    # Prefix: 0, 1, ..., prefix_length - 1
-    # Tree node i: prefix_length + depths[i]
-    position_ids = torch.zeros(total_len, dtype=torch.long, device=device)
-    # Shape: [total_len]
-
-    if prefix_length > 0:
-        position_ids[:prefix_length] = torch.arange(prefix_length, dtype=torch.long, device=device)
-
-    for i in range(num_tree_nodes):
-        position_ids[prefix_length + i] = prefix_length + depths[i]
+    position_ids = torch.zeros(position_ids_len, dtype=torch.long, device=device)
+    if tree_rows_only and num_tree_nodes > 0:
+        for i in range(num_tree_nodes):
+            position_ids[i] = prefix_length + depths[i]
+    else:
+        if prefix_length > 0:
+            position_ids[:prefix_length] = torch.arange(
+                prefix_length, dtype=torch.long, device=device
+            )
+        for i in range(num_tree_nodes):
+            position_ids[prefix_length + i] = prefix_length + depths[i]
 
     # ------------------------------------------------------------------
     # Step 4: Reshape for HuggingFace compatibility
     # ------------------------------------------------------------------
-    # HF expects attention_mask of shape [batch, 1, seq_len, seq_len]
-    # (the head dimension is broadcast).
-    # position_ids: [batch, seq_len]
     attention_mask = mask.unsqueeze(0).unsqueeze(0)
-    # Shape: [1, 1, total_len, total_len]
-
     position_ids = position_ids.unsqueeze(0)
-    # Shape: [1, total_len]
 
     logger.debug(
-        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, depths=%s",
+        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, "
+        "mask_rows=%d, tree_only=%s",
         prefix_length,
         num_tree_nodes,
         total_len,
-        depths,
+        num_rows,
+        tree_rows_only,
     )
 
     return attention_mask, position_ids
