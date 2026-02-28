@@ -662,3 +662,55 @@ class TestVerifyWithMockedModel:
         assert result.num_accepted == 2
         assert result.accepted_token_ids == draft_ids
         assert result.correction_token_id == 99
+
+    @patch("specsplit.workers.target.engine.verify_greedy_tree")
+    @patch("specsplit.workers.target.engine.verify_stochastic_tree")
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_bonus_token_not_duplicate(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_verify_stochastic: MagicMock,
+        mock_verify_greedy: MagicMock,
+    ) -> None:
+        """When temperature > 0 and the tree fully accepts, the bonus token shouldn't duplicate."""
+        draft_ids = [10, 20]
+        prompt_ids = [1, 2]
+        accept_tokens = [0, 10, 20, 0]
+
+        # Simulate a FULLY ACCEPTED path (diverged=False)
+        mock_verify_stochastic.return_value = MagicMock(
+            accepted_tokens=draft_ids,
+            bonus_token=draft_ids[-1], # The bug was that it returned the last accepted token 
+            num_accepted=2,
+            accepted_leaf_index=1,
+            diverged=False,
+            accepted_indices=[0, 1],
+        )
+        mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = TargetWorkerConfig(model_name="gpt2", device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        tree = self._make_tree(draft_ids)
+
+        # Before PR-2 fix, verify_draft_tree would see diverged=False 
+        # but would NOT clear the bonus token if it matched the last accepted token,
+        # leading to duplicate tokens outputted. 
+
+        result = engine.verify_draft_tree(
+            prompt_ids=prompt_ids,
+            draft_tree=tree,
+            session_id=None,
+            temperature=0.5,
+        )
+
+        mock_verify_stochastic.assert_called_once()
+        # Ensure that TargetEngine deduplicated the bonus token because diverged=False 
+        # Since accept_tokens for the next state (base + leaf = 2 + 1 = 3) is index 3 -> 0
+        assert result.num_accepted == 2
+        assert result.accepted_token_ids == draft_ids
+        assert result.correction_token_id == 0

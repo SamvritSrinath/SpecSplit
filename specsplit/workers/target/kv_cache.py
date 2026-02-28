@@ -487,8 +487,14 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             except NotImplementedError:
                 k_slice[:, :, cache_position] = key_states
                 v_slice[:, :, cache_position] = value_states
+                
+            # PR-3: Determine the intended sequence length dynamically.
+            # We must return the full sliced tensor up to this length for ALL layers,
+            # even though self._seq_len is only advanced on the final layer.
+            intended_new_seq_len = max(self._seq_len, int(cache_position.max().item()) + 1)
+            
             if layer_idx == self.num_layers - 1:
-                self._seq_len = int(cache_position.max().item()) + 1
+                self._seq_len = intended_new_seq_len
         else:
             # Contiguous append. Only advance _seq_len on last layer to avoid
             # corrupting subsequent layers (they would write to wrong offsets).
@@ -496,12 +502,21 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             end = start + new_len
             k_slice[:, :, start:end, :] = key_states
             v_slice[:, :, start:end, :] = value_states
+            
+            intended_new_seq_len = end
+            
             if layer_idx == self.num_layers - 1:
-                self._seq_len = end
+                self._seq_len = intended_new_seq_len
 
+        # PR-3 Fix: Return a slice up to `intended_new_seq_len`, NOT `self._seq_len`.
+        # Why is this safe? On a cache hit during the first layer (layer_idx=0), 
+        # self._seq_len might still be the old length (or 0 if misconfigured), but the 
+        # pre-allocated buffers already contain the valid prefix data! Returning the 
+        # larger slice simply exposes the existing valid data + the newly written data 
+        # to the attention operation for this specific layer.
         return (
-            k_slice[:, :, : self._seq_len, :],
-            v_slice[:, :, : self._seq_len, :],
+            k_slice[:, :, : intended_new_seq_len, :],
+            v_slice[:, :, : intended_new_seq_len, :],
         )
 
     def get_seq_length(self, layer_idx: int = 0) -> int:

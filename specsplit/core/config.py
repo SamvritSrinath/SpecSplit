@@ -40,7 +40,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings
 
 logger = logging.getLogger(__name__)
@@ -203,8 +203,23 @@ class OrchestratorConfig(BaseSettings):
         default="gpt2",
         description="HuggingFace model name for the tokenizer. Must match the target/draft model (e.g. Qwen2/Qwen2.5-7B-Instruct); otherwise acceptance is 0%% and output is gibberish.",
     )
+    strict_vocab_check: bool = Field(
+        default=True,
+        description="If True, orchestrator crashes if draft/target vocabularies mismatch. If False, initializes a VocabBridge to remap token IDs.",
+    )
 
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}
+
+    @model_validator(mode="after")
+    def _warn_on_temperature_mismatch(self) -> "OrchestratorConfig":
+        if abs(self.verify_temperature - self.draft_temperature) > 0.01:
+            logger.warning(
+                "Temperature mismatch: verify_temperature=%.2f but draft_temperature=%.2f. "
+                "This mixed configuration is valid but may lead to low acceptance rates.",
+                self.verify_temperature,
+                self.draft_temperature,
+            )
+        return self
 
 
 # ============================================================================

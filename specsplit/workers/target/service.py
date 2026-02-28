@@ -121,12 +121,13 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # tokens as the full prompt would cause the 70B model to
             # verify against a nonsensical context, producing garbage.
             if not prompt_ids and new_ids:
-                if not session_id or session_id not in self._engine._session_caches:
-                    context.abort(
-                        grpc.StatusCode.FAILED_PRECONDITION,
-                        "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
-                        "orchestrator must retry with full context",
-                    )
+                with self._engine._session_dict_lock:
+                    if not session_id or session_id not in self._engine._session_caches:
+                        context.abort(
+                            grpc.StatusCode.FAILED_PRECONDITION,
+                            "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
+                            "orchestrator must retry with full context",
+                        )
                 prompt_ids = new_ids
 
             if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
@@ -156,6 +157,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                 )
             except CacheDesyncError as e:
                 sw.stop()
+                logger.warning("CacheDesyncError in engine: %s", str(e))
                 context.abort(
                     grpc.StatusCode.FAILED_PRECONDITION,
                     str(e),

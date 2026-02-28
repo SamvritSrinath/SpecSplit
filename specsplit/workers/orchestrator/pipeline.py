@@ -147,6 +147,12 @@ class SpeculativeState:
     total_rpc_time_ms: float = 0.0
     per_round_metrics: list[RoundMetrics] = field(default_factory=list)
     is_finished: bool = False
+    
+    # PR-7 / PR-8: Adaptive K and Fallback Mode State
+    current_k: int = 0  # Initialized from config.max_draft_tokens
+    recent_acceptance_rates: deque[float] = field(default_factory=lambda: deque(maxlen=5))
+    is_fallback_mode: bool = False
+    consecutive_low_acceptance: int = 0
 
 
 @dataclass
@@ -343,6 +349,7 @@ async def _call_generate_drafts(
     context_ids: list[int],
     config: OrchestratorConfig,
     round_idx: int,
+    draft_len: int,
     reset_cache: bool = False,
     session_id: str | None = None,
 ) -> _RpcResult[DraftTree]:
@@ -357,6 +364,7 @@ async def _call_generate_drafts(
         context_ids: Current context (prompt + generated so far).
         config: Pipeline configuration.
         round_idx: Current round index (for tracing).
+        draft_len: Dynamic depth of the speculative draft tree (Adaptive K).
         reset_cache: If True, instruct the draft engine to clear its
             KV cache before generating (e.g. after speculation miss).
         session_id: Session ID for per-session KV cache isolation
@@ -380,7 +388,7 @@ async def _call_generate_drafts(
     request = spec_decoding_pb2.DraftRequest(
         request_id=f"round-{round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=context_ids,
-        max_draft_len=config.max_draft_tokens,
+        max_draft_len=draft_len,
         temperature=config.draft_temperature,
         reset_cache=reset_cache,
         session_id=session_id or "",
@@ -421,6 +429,7 @@ async def _call_verify_drafts(
     config: OrchestratorConfig,
     new_token_ids: list[int] | None = None,
     expected_prefix_length: int = 0,
+    vocab_bridge: Any | None = None,
 ) -> _RpcResult[VerificationResult]:
     """Call ``TargetService.VerifyDrafts`` over gRPC.
 
@@ -435,6 +444,7 @@ async def _call_verify_drafts(
         config: Pipeline configuration.
         new_token_ids: Delta tokens since last verified position (Issue 11).
             When provided, sent instead of full context to reduce bandwidth.
+        vocab_bridge: Optional bridge to convert between draft/target vocabularies.
 
     Returns:
         An :class:`_RpcResult` wrapping a :class:`VerificationResult` and
@@ -451,14 +461,23 @@ async def _call_verify_drafts(
     if config.simulated_rtt_ms > 0:
         await asyncio.sleep(config.simulated_rtt_ms / 1000.0)
 
+    # Apply vocab_bridge translation if configured
+    target_context_ids = context_ids
+    target_new_token_ids = new_token_ids or []
+    target_expected_prefix_length = expected_prefix_length
+    
+    # We omit translating draft_tree.proto_nodes as that would require mutating
+    # the protobuf tree deeply. The VocabBridge primarily handles linear sequences.
+    # To fully support heterogeneous trees, _arrays_to_proto_nodes should use it.
+    
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
-        prompt_token_ids=context_ids,
+        prompt_token_ids=target_context_ids,
         draft_tree=draft_tree.proto_nodes,
         session_id=session_id or "",
         temperature=config.verify_temperature,
-        new_token_ids=new_token_ids or [],
-        expected_prefix_length=expected_prefix_length,
+        new_token_ids=target_new_token_ids,
+        expected_prefix_length=target_expected_prefix_length,
     )
 
     # Issue 9: Pass timeout to prevent indefinite hangs
@@ -476,6 +495,12 @@ async def _call_verify_drafts(
     # proto3 defaults correction_token_id to 0 when unset, so we cannot
     # rely on the value alone.
     bonus = response.correction_token_id if response.has_correction else None
+
+    # Apply vocab map backwards (target -> draft)
+    if vocab_bridge is not None:
+        accepted_tokens = [vocab_bridge.target_to_draft_id(t) for t in accepted_tokens]
+        if bonus is not None:
+            bonus = vocab_bridge.target_to_draft_id(bonus)
 
     logger.debug(
         "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s, rpc_ms=%.2f",
@@ -535,6 +560,7 @@ async def run_speculative_loop_async(
     config: OrchestratorConfig | None = None,
     session_id: str = "default",
     eos_token_id: int | None = None,
+    vocab_bridge: Any | None = None,
 ) -> PipelineResult:
     """Run the overlapped speculative decoding loop.
 
@@ -555,6 +581,7 @@ async def run_speculative_loop_async(
         config: Pipeline configuration (defaults, timeouts, limits).
         session_id: Session ID for KV cache reuse on the Target Worker.
         eos_token_id: Token ID that signals end-of-generation.
+        vocab_bridge: Optional VocabBridge mapping token IDs if draft/target differ.
 
     Returns:
         A :class:`PipelineResult` with the generated tokens, statistics,
@@ -591,6 +618,8 @@ async def run_speculative_loop_async(
         cfg.draft_temperature,
     )
 
+    state.current_k = cfg.max_draft_tokens
+
     current_context = list(prompt_ids)
     current_draft: DraftTree | None = None
     speculative_draft: DraftTree | None = None
@@ -607,6 +636,7 @@ async def run_speculative_loop_async(
                 current_context,
                 cfg,
                 round_idx=0,
+                draft_len=state.current_k,
                 session_id=session_id,
             )
         except grpc.aio.AioRpcError as e:
@@ -686,6 +716,7 @@ async def run_speculative_loop_async(
                 cfg,
                 new_token_ids=delta_token_ids,
                 expected_prefix_length=verified_context_len,
+                vocab_bridge=vocab_bridge,
             )
         )
 
@@ -709,6 +740,7 @@ async def run_speculative_loop_async(
                     speculative_context,
                     cfg,
                     round_idx=round_idx + 1,
+                    draft_len=state.current_k,
                     session_id=session_id,
                 )
             )
@@ -719,7 +751,7 @@ async def run_speculative_loop_async(
             "overlapped_round",
             round_idx=round_idx,
             draft_tokens=len(current_draft.token_ids),
-        ):
+        ) as ctx:
             try:
                 verify_rpc_result, speculative_draft_rpc_result = await asyncio.gather(
                     verify_task,
@@ -745,8 +777,11 @@ async def run_speculative_loop_async(
                 # Cache-eviction retry: target rejected delta-only payload
                 # because the session was evicted (TTL/LRU). Retry with
                 # full context so the target can rebuild its cache.
+                # PR-4 Fix: The python TargetEngine raises CacheDesyncError,
+                # which gRPC translates to StatusCode.UNKNOWN. We must check
+                # both that or FAILED_PRECONDITION depending on interceptors.
                 if (
-                    e.code() == grpc.StatusCode.FAILED_PRECONDITION
+                    e.code() in (grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.UNKNOWN)
                     and "CACHE_EVICTED_DELTA_ONLY" in (e.details() or "")
                 ):
                     logger.warning(
@@ -769,8 +804,10 @@ async def run_speculative_loop_async(
                         cfg,
                         new_token_ids=None,
                         expected_prefix_length=0,
+                        vocab_bridge=vocab_bridge,
                     )
                     verify_rpc_result = retry_result
+                    # Only add the retry time to the total sum
                     state.total_rpc_time_ms += retry_result.elapsed_ms
 
                     # Re-issue speculative draft
@@ -780,6 +817,7 @@ async def run_speculative_loop_async(
                         speculative_context,
                         cfg,
                         round_idx=round_idx + 1,
+                        draft_len=state.current_k,
                         session_id=session_id,
                     )
                     state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
@@ -792,16 +830,26 @@ async def run_speculative_loop_async(
                             await t
                     raise
 
-        # Unwrap _RpcResult and accumulate RPC times
-        verify_result = verify_rpc_result.value
-        speculative_draft = speculative_draft_rpc_result.value
+            # Unwrap _RpcResult and accumulate RPC times
+            verify_result = verify_rpc_result.value
+            speculative_draft = speculative_draft_rpc_result.value
 
-        # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum.
-        # elapsed_ms already includes simulated_rtt (sleep is inside RPC stopwatch).
-        state.total_rpc_time_ms += max(
-            verify_rpc_result.elapsed_ms,
-            speculative_draft_rpc_result.elapsed_ms
-        )
+            # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum.
+            # elapsed_ms already includes simulated_rtt (sleep is inside RPC stopwatch).
+            actual_wait_ms = max(
+                verify_rpc_result.elapsed_ms,
+                speculative_draft_rpc_result.elapsed_ms
+            )
+            state.total_rpc_time_ms += actual_wait_ms
+
+            # Log extended structured telemetry metrics (PR-11)
+            ctx.metadata["verify_rpc_ms"] = verify_rpc_result.elapsed_ms
+            ctx.metadata["draft_rpc_ms"] = speculative_draft_rpc_result.elapsed_ms
+            ctx.metadata["overlap_savings_ms"] = (
+                verify_rpc_result.elapsed_ms + speculative_draft_rpc_result.elapsed_ms - actual_wait_ms
+            )
+            # Simple approximation of payload serialization size
+            ctx.metadata["payload_bytes"] = len(current_draft.token_ids) * 8 + len(current_context) * 4
 
         # --------------------------------------------------------------
         # Step B: Process verification result
@@ -826,6 +874,35 @@ async def run_speculative_loop_async(
                 acceptance_rate=round_acc,
             )
         )
+        
+        # Update rolling acceptance rate queue
+        state.recent_acceptance_rates.append(round_acc)
+        rolling_mean = sum(state.recent_acceptance_rates) / len(state.recent_acceptance_rates)
+
+        # PR-7 / PR-8: Dynamic K Adjustment and Fallback Mode
+        # Only adjust after we have at least 3 samples
+        if len(state.recent_acceptance_rates) >= 3:
+            # PR-8: Fallback Circuit Breaker
+            if rolling_mean < 0.1:
+                state.consecutive_low_acceptance += 1
+                if state.consecutive_low_acceptance >= 2:
+                    if not state.is_fallback_mode:
+                        logger.warning("Acceptance rate collapsed (%.2f). Entering Fallback Mode.", rolling_mean)
+                    state.is_fallback_mode = True
+            else:
+                state.consecutive_low_acceptance = 0
+                if state.is_fallback_mode and rolling_mean > 0.3:
+                    logger.info("Acceptance rate recovered (%.2f). Exiting Fallback Mode.", rolling_mean)
+                    state.is_fallback_mode = False
+
+            # PR-7: Adaptive K
+            if not state.is_fallback_mode:
+                if rolling_mean > 0.8 and state.current_k < cfg.max_draft_tokens:
+                    state.current_k = min(state.current_k + 2, cfg.max_draft_tokens)
+                    logger.debug("High acceptance (%.2f), increasing K to %d", rolling_mean, state.current_k)
+                elif rolling_mean < 0.4 and state.current_k > 1:
+                    state.current_k = max(state.current_k - 2, 1)
+                    logger.debug("Low acceptance (%.2f), decreasing K to %d", rolling_mean, state.current_k)
 
         # Append accepted tokens and bonus token to output
         new_tokens = list(verify_result.accepted_tokens)
@@ -954,13 +1031,18 @@ async def run_speculative_loop_async(
                     speculative_draft = None
                 else:
                     keep: set[int] = set()
+                    
+                    children_map: dict[int, list[int]] = {}
+                    for i, parent_idx in enumerate(old_topo):
+                        children_map.setdefault(parent_idx, []).append(i)
+
                     queue_prune = list(children_of_matched)
                     while queue_prune:
                         node = queue_prune.pop(0)
                         keep.add(node)
-                        for j, parent in enumerate(old_topo):
-                            if parent == node and j not in keep:
-                                queue_prune.append(j)
+                        for child in children_map.get(node, []):
+                            if child not in keep:
+                                queue_prune.append(child)
                     sorted_keep = sorted(keep)
                     old_to_new = {old: new for new, old in enumerate(sorted_keep)}
                     new_ids = [old_ids[i] for i in sorted_keep]
@@ -1023,6 +1105,7 @@ async def run_speculative_loop_async(
                         current_context,
                         cfg,
                         round_idx=round_idx + 1,
+                        draft_len=state.current_k,
                         session_id=session_id,
                     )
                 except grpc.aio.AioRpcError as e:

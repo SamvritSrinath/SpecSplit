@@ -96,10 +96,12 @@ class DraftEngine:
         self._model: Any = None  # transformers.AutoModelForCausalLM
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._is_loaded = False
+        self._eos_token_id: int | None = None
 
         # Session-based KV cache (Issue 5: thread-safety)
         self._session_caches: dict[str, DraftCacheState] = {}
         self._session_locks: dict[str, threading.Lock] = {}
+        self._global_lock = threading.Lock()
 
         # Backwards-compatible singleton cache for session_id=None
         self._default_cache = DraftCacheState()
@@ -117,6 +119,7 @@ class DraftEngine:
         configured device.
         """
         self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
+        self._eos_token_id = self._tokenizer.eos_token_id
         # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
         # dense tensors and never use HF batch padding.
 
@@ -137,9 +140,10 @@ class DraftEngine:
 
         Thread-safe: creates a lock per session on first access.
         """
-        if session_id not in self._session_caches:
-            self._session_caches[session_id] = DraftCacheState()
-            self._session_locks[session_id] = threading.Lock()
+        with self._global_lock:
+            if session_id not in self._session_caches:
+                self._session_caches[session_id] = DraftCacheState()
+                self._session_locks[session_id] = threading.Lock()
         return self._session_caches[session_id]
 
     def generate_draft_tree(
@@ -373,6 +377,20 @@ class DraftEngine:
                         token_id_int = top_indices[0, b].item()
                         prob_val = max(top_probs[0, b].item(), 1e-10)
                         log_prob = math.log(prob_val)
+                        
+                        if self._eos_token_id is not None and token_id_int == self._eos_token_id:
+                            child_node = TokenNode(
+                                token_id=token_id_int,
+                                log_prob=log_prob,
+                                top_k_token_ids=topk_ids,
+                                top_k_probs=topk_vals,
+                            )
+                            if parent_node is None:
+                                roots.append(child_node)
+                            else:
+                                parent_node.children.append(child_node)
+                            continue
+
                         expansion_items.append(
                             (
                                 parent_node,

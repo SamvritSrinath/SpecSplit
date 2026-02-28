@@ -109,33 +109,13 @@ def build_tree_attention(
     # Step 1: Compute each node's depth and ancestor set
     # ------------------------------------------------------------------
     depths: list[int] = [0] * num_tree_nodes
-    ancestors: list[set[int]] = [set() for _ in range(num_tree_nodes)]
 
-    for i in range(num_tree_nodes):
-        visited: set[int] = set()
-        cur = i
-        depth = 0
-        chain: list[int] = [i]
-
-        while cur != -1:
-            if cur in visited:
-                raise ValueError(
-                    f"Cycle detected in topology_map at node {i}: revisited node {cur}"
-                )
-            if cur < -1 or cur >= num_tree_nodes:
-                raise ValueError(
-                    f"topology_map[{i}] references out-of-range parent "
-                    f"index {cur} (num_tree_nodes={num_tree_nodes})"
-                )
-            visited.add(cur)
-            parent = topology_map[cur]
-            if parent != -1:
-                depth += 1
-                chain.append(parent)
-            cur = parent
-
-        depths[i] = depth
-        ancestors[i] = set(chain)
+    # PR-9: Fast O(N) Tree Attention Ancestor Computation
+    # Assert that the topology map is topologically sorted (BFS order).
+    # Since nodes refer to parents, the parent must be computed before the child.
+    if num_tree_nodes > 0:
+        assert all(topology_map[i] < i for i in range(num_tree_nodes) if topology_map[i] != -1), \
+            "topology_map is not topologically sorted"
 
     # ------------------------------------------------------------------
     # Step 2: Build the attention mask (sparse or full)
@@ -147,8 +127,17 @@ def build_tree_attention(
         for i in range(num_tree_nodes):
             if prefix_length > 0:
                 mask[i, :prefix_length] = True
-            for anc in ancestors[i]:
-                mask[i, prefix_length + anc] = True
+            
+            parent = topology_map[i]
+            if parent != -1:
+                depths[i] = depths[parent] + 1
+                # PR-9: Inherit parent's ancestors directly via boolean mask slice
+                mask[i, prefix_length : prefix_length + i] = mask[parent, prefix_length : prefix_length + i]
+                # Include the parent itself
+                mask[i, prefix_length + parent] = True
+            else:
+                depths[i] = 1
+
         num_rows = num_tree_nodes
         position_ids_len = num_tree_nodes
     else:
@@ -163,8 +152,16 @@ def build_tree_attention(
             mask[prefix_length:, :prefix_length] = True
         for i in range(num_tree_nodes):
             row = prefix_length + i
-            for anc in ancestors[i]:
-                mask[row, prefix_length + anc] = True
+            parent = topology_map[i]
+            if parent != -1:
+                depths[i] = depths[parent] + 1
+                parent_row = prefix_length + parent
+                # PR-9: Inherit parent's ancestors directly via boolean mask slice
+                mask[row, prefix_length : row] = mask[parent_row, prefix_length : row]
+                # Include the parent itself
+                mask[row, parent_row] = True
+            else:
+                depths[i] = 1
         num_rows = total_len
         position_ids_len = total_len
 

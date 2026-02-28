@@ -176,6 +176,60 @@ class TelemetryLogger:
         out.write_text(json.dumps(payload, indent=2))
         logger.info("Exported %d spans to %s", len(self._spans), out)
 
+    def export_csv(self, path: str | Path) -> None:
+        """Export all recorded spans to a CSV file."""
+        import csv
+        out = Path(path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        if not self._spans:
+            logger.info("No spans to export to CSV.")
+            return
+        
+        # Collect all unique metadata keys
+        metadata_keys = set()
+        for span in self._spans:
+            metadata_keys.update(span.metadata.keys())
+        metadata_headers = sorted(list(metadata_keys))
+
+        headers = ["span_id", "operation", "wall_time_ms", "timestamp"] + metadata_headers
+
+        with out.open("w", newline="") as f:
+            writer = csv.DictWriter(f, fieldnames=headers)
+            writer.writeheader()
+            for span in self._spans:
+                row = {
+                    "span_id": span.span_id,
+                    "operation": span.operation,
+                    "wall_time_ms": round(span.wall_time_ms, 4),
+                    "timestamp": span.timestamp_iso,
+                }
+                for k in metadata_headers:
+                    row[k] = span.metadata.get(k, "")
+                writer.writerow(row)
+        logger.info("Exported %d spans (CSV) to %s", len(self._spans), out)
+
+    def export_prometheus(self, path: str | Path) -> None:
+        """Export all recorded spans to a Prometheus text-based format."""
+        out = Path(path)
+        out.parent.mkdir(parents=True, exist_ok=True)
+        
+        lines = [
+            "# HELP specsplit_operation_duration_ms Duration of operations in milliseconds",
+            "# TYPE specsplit_operation_duration_ms summary"
+        ]
+        
+        for span in self._spans:
+            labels = [f'operation="{span.operation}"', f'service="{self.service_name}"']
+            for k, v in span.metadata.items():
+                if isinstance(v, (int, float, str, bool)):
+                    labels.append(f'{k}="{v}"')
+            
+            label_str = ",".join(labels)
+            lines.append(f'specsplit_operation_duration_ms{{{label_str}}} {span.wall_time_ms:.4f}')
+        
+        out.write_text("\n".join(lines) + "\n")
+        logger.info("Exported %d spans (Prometheus) to %s", len(self._spans), out)
+
     def reset(self) -> None:
         """Clear all recorded spans."""
         self._spans = deque(maxlen=self._max_spans)
@@ -192,14 +246,14 @@ class _SpanContext:
     ) -> None:
         self._logger = logger
         self._operation = operation
-        self._metadata = metadata
+        self.metadata = metadata
         self._sw = Stopwatch()
         self.span_id = uuid.uuid4().hex[:16]
 
-    def __enter__(self) -> str:
-        """Start timing and return the span ID."""
+    def __enter__(self) -> _SpanContext:
+        """Start timing and return the span context."""
         self._sw.start()
-        return self.span_id
+        return self
 
     def __exit__(self, *_: Any) -> None:
         """Stop timing and record the span."""
@@ -208,6 +262,6 @@ class _SpanContext:
             span_id=self.span_id,
             operation=self._operation,
             wall_time_ms=self._sw.elapsed_ms,
-            metadata=self._metadata,
+            metadata=self.metadata,
         )
         self._logger.record_span(span)

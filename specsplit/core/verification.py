@@ -225,7 +225,8 @@ def verify_greedy_tree(
             if len(path) > len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
-                best_diverged = True
+                if not children[node_idx]:
+                    best_diverged = True
             continue
 
         # Node is accepted — extend the path
@@ -342,59 +343,91 @@ def verify_stochastic_tree(
             diverged=True,
         )
 
-    children: dict[int, list[int]] = {}
-    for i, p in enumerate(topology_map):
-        children.setdefault(p, []).append(i)
-    roots = children.get(-1, [])
+    # ------------------------------------------------------------------
+    # Step 1: Precompute per-node acceptance
+    # ------------------------------------------------------------------
+    # Precompute random values to avoid CPU-GPU sync inside the loop
+    # We only care about matching `draft_tokens` vs `target_probs` here.
+    
+    # Fast path array prep
+    rn = torch.rand(num_tree_nodes, device=target_probs.device).cpu().tolist()
+    d_tokens = draft_tokens.cpu().tolist()
+    d_probs = draft_probs.cpu().tolist()
+    # Need target_probs for draft tokens to check acceptance
+    t_probs_draft = target_probs[torch.arange(num_tree_nodes), draft_tokens].cpu().tolist()
+    
+    accepted_list = [False] * num_tree_nodes
+    
+    for i in range(num_tree_nodes):
+        q_val = d_probs[i]
+        p_val = t_probs_draft[i]
+        
+        if q_val <= 0:
+            accepted_list[i] = False
+        elif p_val >= q_val:
+            accepted_list[i] = True
+        else:
+            accepted_list[i] = rn[i] < (p_val / q_val)
+
+    # ------------------------------------------------------------------
+    # Step 2: Build topology mapping
+    # ------------------------------------------------------------------
+    children: list[list[int]] = [[] for _ in range(num_tree_nodes)]
+    roots: list[int] = []
+    for i, parent in enumerate(topology_map):
+        if parent == -1:
+            roots.append(i)
+        else:
+            children[parent].append(i)
+
     if not roots:
         raise ValueError("verify_stochastic_tree: draft tree has no root nodes")
 
+    # ------------------------------------------------------------------
+    # Step 3: DFS to find the longest continuously-accepted path
+    # ------------------------------------------------------------------
     best_path: list[int] = []
-    best_divergence_node = -1
+    best_divergence_node: int = -1
     best_diverged: bool = True
+    
     stack: list[tuple[int, list[int]]] = [(r, []) for r in roots]
-
+    
     while stack:
         node_idx, path = stack.pop()
-        token_id = draft_tokens[node_idx].item()
-        p_val = target_probs[node_idx, token_id].item()
-        q_val = draft_probs[node_idx].item()
-
-        if q_val <= 0:
-            accepted = False
-        elif p_val >= q_val:
-            accepted = True
-        else:
-            accepted = torch.rand(1).item() < (p_val / q_val)
-
-        if not accepted:
+        
+        if not accepted_list[node_idx]:
+            # This node is REJECTED. The path up to (but not including)
+            # this node is a candidate for the longest accepted path.
             if len(path) > len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
+                # It ended in a rejection, so it diverged
                 best_diverged = True
-            elif best_divergence_node < 0:
-                # Rejection at root or first node: use this node for bonus sampling.
+            elif len(path) == len(best_path) and best_divergence_node < 0:
+                # E.g. rejection at the very roots
                 best_divergence_node = node_idx
             continue
-
+            
+        # Node is accepted — extend the path
         new_path = [*path, node_idx]
-        node_children = children.get(node_idx, [])
-
-        if not node_children:
-            # Leaf node — fully accepted path
+        
+        if not children[node_idx]:
+            # Leaf node — this path is complete and fully accepted
             if len(new_path) > len(best_path):
                 best_path = new_path
                 best_divergence_node = node_idx
                 best_diverged = False  # Fully accepted to leaf
         else:
-            if len(new_path) > len(best_path):
-                best_path = new_path
-                best_divergence_node = node_idx
-                best_diverged = False  # Tentatively not diverged (may update)
-            for c in node_children:
-                stack.append((c, new_path))
-
-    accepted_tokens = [draft_tokens[i].item() for i in best_path]
+            # Internal node — continue DFS into children
+            for child_idx in children[node_idx]:
+                stack.append((child_idx, new_path))
+                
+    # ------------------------------------------------------------------
+    # Step 4: Extract results and sample bonus token
+    # ------------------------------------------------------------------
+    accepted_tokens = [d_tokens[i] for i in best_path]
+    current_node = best_path[-1] if best_path else -1
+    
     if best_divergence_node >= 0:
         p_dist = target_probs[best_divergence_node]
         if best_diverged:
@@ -405,8 +438,8 @@ def verify_stochastic_tree(
                 residual_probs = torch.relu(p_dist - q_dist)
             else:
                 # Legacy: only have p_draft at drafted token, assume 0 elsewhere.
-                draft_token_id = draft_tokens[best_divergence_node].item()
-                q_val = draft_probs[best_divergence_node]
+                draft_token_id = d_tokens[best_divergence_node]
+                q_val = d_probs[best_divergence_node]
                 residual_probs = p_dist.clone()
                 residual_probs[draft_token_id] = torch.relu(
                     p_dist[draft_token_id] - q_val
@@ -422,8 +455,13 @@ def verify_stochastic_tree(
             # Fully accepted path: sample from target distribution at leaf
             bonus_token = torch.multinomial(p_dist, 1).item()
     else:
-        bonus_token = -1
-    current_node = best_path[-1] if best_path else -1
+        # Edge case: all roots were rejected on the first token, but we didn't track them.
+        # Fallback to the first root
+        if roots:
+            bonus_token = torch.multinomial(target_probs[roots[0]], 1).item()
+        else:
+            bonus_token = -1
+
     return VerificationResult(
         accepted_tokens=accepted_tokens,
         bonus_token=bonus_token,

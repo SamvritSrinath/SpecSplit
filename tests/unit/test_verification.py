@@ -11,8 +11,8 @@ from specsplit.core.verification import verify_greedy_tree, verify_stochastic_tr
 class TestVerifyGreedyTree:
     """Tests for verify_greedy_tree."""
 
-    def test_basic_match_single_path(self) -> None:
-        """When target argmax matches all draft tokens on a chain, all are accepted."""
+    def test_basic_match_single_path_bonus_token(self) -> None:
+        """RR-1: When target argmax matches all draft tokens on a chain, bonus is target's choice at leaf (which is a duplicate to be fixed by engine)."""
         draft_tokens = torch.tensor([42, 17, 99], dtype=torch.long)
         vocab_size = 128
         target_logits = torch.zeros(3, vocab_size)
@@ -24,7 +24,9 @@ class TestVerifyGreedyTree:
         assert result.accepted_tokens == [42, 17, 99]
         assert result.num_accepted == 3
         assert result.accepted_leaf_index == 2
-        assert result.bonus_token >= 0
+        # The core logic returns the duplicate (99) because it lacks next-token logits.
+        # TargetEngine will replace this with the true correction token.
+        assert result.bonus_token == 99
 
     def test_mismatch_at_root(self) -> None:
         """When target disagrees at root, no tokens accepted; bonus from first root."""
@@ -166,6 +168,32 @@ class TestVerifyStochasticTree:
         # Either 0 or 1 accepted depending on random; bonus_token from divergence/root
         assert result.num_accepted <= 2
         assert result.bonus_token >= 0 or result.num_accepted == 0
+
+    def test_stochastic_residual_normalization_fallback(self) -> None:
+        """RR-3: When residual sums to 0, fallback to target distribution p_dist."""
+        torch.manual_seed(42)
+        draft_tokens = torch.tensor([10], dtype=torch.long)
+        draft_probs = torch.tensor([1.0], dtype=torch.float32)
+        
+        vocab_size = 64
+        target_probs = torch.zeros(1, vocab_size)
+        target_probs[0, 10] = 0.5
+        target_probs[0, 20] = 0.5
+        
+        draft_probs_full = torch.zeros(1, vocab_size)
+        draft_probs_full[0, 10] = 0.5
+        draft_probs_full[0, 20] = 0.5
+        
+        topology_map = [-1]
+        
+        # p=0.5, q=1.0 -> p/q = 0.5. torch.manual_seed(42) produces ~0.88 > 0.5, so REJECT.
+        # residual = relu(p - q) = relu(0) = 0. Sum is 0. 
+        # Fallback multinomial from target_probs (50% 10, 50% 20).
+        result = verify_stochastic_tree(
+            draft_tokens, draft_probs, target_probs, topology_map, draft_probs_full=[draft_probs_full[0]]
+        )
+        assert result.num_accepted == 0
+        assert result.bonus_token in (10, 20)
 
     def test_multi_branch_longest_path_wins(self) -> None:
         """Longest accepted path across branches is chosen (stochastic with p>=q)."""

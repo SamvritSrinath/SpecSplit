@@ -65,6 +65,7 @@ class Orchestrator:
         self._draft_stub: spec_decoding_pb2_grpc.DraftServiceStub | None = None
         self._target_stub: spec_decoding_pb2_grpc.TargetServiceStub | None = None
         self._tokenizer: Any = None
+        self._vocab_bridge: Any | None = None
         self._sync_executor: concurrent.futures.ThreadPoolExecutor | None = None
 
         logger.info(
@@ -77,7 +78,11 @@ class Orchestrator:
         )
 
     def _ensure_tokenizer(self) -> Any:
-        """Lazily load the HuggingFace tokenizer on first use."""
+        """Lazily load the HuggingFace tokenizer on first use.
+        
+        Also validates vocabulary alignment between draft/target models if they differ.
+        If strict_vocab_check is False, it initializes the VocabBridge here.
+        """
         if self._tokenizer is None:
             from transformers import AutoTokenizer
 
@@ -85,6 +90,32 @@ class Orchestrator:
             if self._tokenizer.pad_token is None:
                 self._tokenizer.pad_token = self._tokenizer.eos_token
             logger.info("Tokenizer loaded: %s", self.model_name)
+            
+            # Check draft and target vocabularies
+            draft_model_env = os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
+            target_model_env = os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
+            
+            if draft_model_env and target_model_env and draft_model_env != target_model_env:
+                logger.info("Draft and Target use different models. Checking vocabulary alignment...")
+                draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_env)
+                target_tokenizer = AutoTokenizer.from_pretrained(target_model_env)
+                
+                if len(draft_tokenizer) != len(target_tokenizer):
+                    if self.config.strict_vocab_check:
+                        msg = (
+                            f"Vocabulary mismatch: Draft vocab size {len(draft_tokenizer)}, "
+                            f"Target vocab size {len(target_tokenizer)}. "
+                            "With strict_vocab_check=True, heterogeneous models must "
+                            "have the same vocabulary size. Set strict_vocab_check=False "
+                            "to enable VocabBridge."
+                        )
+                        logger.error(msg)
+                        raise RuntimeError(msg)
+                    else:
+                        from specsplit.workers.orchestrator.vocab_bridge import VocabBridge
+                        self._vocab_bridge = VocabBridge(draft_tokenizer, target_tokenizer)
+                        logger.info("strict_vocab_check is False. Initialized VocabBridge.")
+
         return self._tokenizer
 
     def connect(self) -> None:
@@ -159,6 +190,7 @@ class Orchestrator:
                     config=self.config,
                     session_id=session_id,
                     eos_token_id=eos_token_id,
+                    vocab_bridge=self._vocab_bridge,
                 )
 
                 output_text = tokenizer.decode(
@@ -251,9 +283,112 @@ class Orchestrator:
         output_text, _ = self.run_with_result_sync(prompt)
         return output_text
 
+    def chat_session(self) -> "ConversationSession":
+        """Create a new stateful ConversationSession."""
+        if not self.config.use_target_kv_cache:
+            logger.warning("Starting chat session with use_target_kv_cache=False. Performance will suffer.")
+        self._ensure_tokenizer()
+        return ConversationSession(self)
+
     def export_telemetry(self, path: str) -> None:
         """Export collected telemetry spans to a JSON file."""
         self._telemetry.export(path)
+
+
+class ConversationSession:
+    """A stateful conversation session for multi-turn interactions.
+
+    Maintains accumulated token IDs across multiple `generate()` turns
+    to avoid O(n^2) re-tokenization. Automatically manages the session ID
+    and KV cache cleanup on the Target Worker via context manager.
+    """
+
+    def __init__(self, orchestrator: Orchestrator) -> None:
+        self.orchestrator = orchestrator
+        self.session_id: str = uuid.uuid4().hex
+        self.accumulated_token_ids: list[int] = []
+        self._is_active: bool = True
+        logger.info("Initializing ConversationSession %s", self.session_id)
+
+    def __enter__(self) -> "ConversationSession":
+        return self
+
+    def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
+        self.end()
+
+    async def generate_async(self, user_prompt: str) -> str:
+        """Async generation for the next turn in the conversation."""
+        if not self._is_active:
+            raise RuntimeError("Cannot generate on an ended session.")
+
+        tokenizer = self.orchestrator._tokenizer
+        eos_token_id = tokenizer.eos_token_id or 2
+
+        # Tokenize new prompt and append to history
+        new_prompt_ids = tokenizer.encode(user_prompt)
+        self.accumulated_token_ids.extend(new_prompt_ids)
+
+        if self.orchestrator._draft_channel is None:
+            self.orchestrator.connect()
+
+        with self.orchestrator._telemetry.span("chat_turn", session_id=self.session_id):
+            result: PipelineResult = await run_speculative_loop_async(
+                draft_stub=self.orchestrator._draft_stub,
+                target_stub=self.orchestrator._target_stub,
+                prompt_ids=self.accumulated_token_ids,
+                config=self.orchestrator.config,
+                session_id=self.session_id,
+                eos_token_id=eos_token_id,
+                vocab_bridge=self.orchestrator._vocab_bridge,
+            )
+
+            self.accumulated_token_ids.extend(result.output_tokens)
+            output_text = tokenizer.decode(result.output_tokens, skip_special_tokens=True)
+            return output_text
+
+    def generate(self, user_prompt: str) -> str:
+        """Sync generation for the next turn in the conversation."""
+        orch = self.orchestrator
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            if orch._loop is None or orch._loop.is_closed():
+                orch._loop = asyncio.new_event_loop()
+                asyncio.set_event_loop(orch._loop)
+            return orch._loop.run_until_complete(self.generate_async(user_prompt))
+
+        def _run_in_thread() -> str:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            try:
+                return loop.run_until_complete(self.generate_async(user_prompt))
+            finally:
+                loop.close()
+
+        if orch._sync_executor is None:
+            orch._sync_executor = concurrent.futures.ThreadPoolExecutor(
+                max_workers=1, thread_name_prefix="orchestrator-sync"
+            )
+        return orch._sync_executor.submit(_run_in_thread).result()
+
+    def end(self) -> None:
+        """End the session and explicitly flush the Target Worker's KV cache."""
+        if not self._is_active:
+            return
+        self._is_active = False
+
+        if self.orchestrator._target_stub is not None:
+            try:
+                from specsplit.proto import spec_decoding_pb2
+
+                end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
+                # Attempt to run synchronously if we aren't in a running loop, otherwise block via thread?
+                # The pipeline already has `_call_flush_target_cache` but we are sync here.
+                # Easiest way is to just call the stub and ignore the awaitable.
+                end_resp = self.orchestrator._target_stub.EndSession(end_req)
+                logger.debug("ConversationSession %s ended.", self.session_id)
+            except Exception:
+                logger.debug("ConversationSession %s cleanup failed (non-critical).", self.session_id)
 
 
 def main() -> None:

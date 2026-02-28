@@ -136,7 +136,7 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
 
 def _flatten_tree(
     draft_tree: list[dict[str, Any]], vocab_size: int, device: torch.device, dtype: torch.dtype
-) -> tuple[list[int], list[int], list[float], list[torch.Tensor] | None]:
+) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
     """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
 
     Performs a BFS traversal of the tree and assigns contiguous indices to each node.
@@ -145,14 +145,16 @@ def _flatten_tree(
 
     Returns:
         (token_ids, topology_map, log_probs, draft_probs_full or None).
-        draft_probs_full is a list of [vocab_size] tensors per node when top-k
+        draft_probs_full is a [num_nodes, vocab_size] tensor if top-k
         data is present; None otherwise (legacy single log_prob per node).
     """
     token_ids: list[int] = []
     topology_map: list[int] = []
     log_probs: list[float] = []
-    draft_probs_full: list[torch.Tensor] = []
     has_top_k = False
+
+    all_indices = []
+    all_values = []
 
     queue: deque[tuple[dict[str, Any], int]] = deque()
     for root in draft_tree:
@@ -167,28 +169,26 @@ def _flatten_tree(
 
         top_k_ids = node.get("top_k_token_ids", [])
         top_k_vals = node.get("top_k_probs", [])
-        probs = torch.zeros(vocab_size, dtype=dtype, device=device)
+        
         if top_k_ids and top_k_vals:
             has_top_k = True
-            # Batched scatter: avoid per-element CPU-GPU sync from probs[tid]=float(p).
-            valid_pairs = [
-                (tid, float(p)) for tid, p in zip(top_k_ids, top_k_vals)
-                if 0 <= tid < vocab_size
-            ]
-            if valid_pairs:
-                indices = torch.tensor(
-                    [p[0] for p in valid_pairs], dtype=torch.long, device=device
-                )
-                values = torch.tensor(
-                    [p[1] for p in valid_pairs], dtype=dtype, device=device
-                )
-                probs.scatter_(0, indices, values)
-        draft_probs_full.append(probs)
+            for tid, p in zip(top_k_ids, top_k_vals):
+                if 0 <= tid < vocab_size:
+                    all_indices.append([current_idx, tid])
+                    all_values.append(float(p))
 
         for child in node.get("children", []):
             queue.append((child, current_idx))
 
-    return token_ids, topology_map, log_probs, draft_probs_full if has_top_k else None
+    if has_top_k:
+        draft_probs_full = torch.zeros((len(token_ids), vocab_size), dtype=dtype, device=device)
+        if all_indices:
+            idx_tensor = torch.tensor(all_indices, dtype=torch.long, device=device)
+            val_tensor = torch.tensor(all_values, dtype=dtype, device=device)
+            draft_probs_full[idx_tensor[:, 0], idx_tensor[:, 1]] = val_tensor
+        return token_ids, topology_map, log_probs, draft_probs_full
+
+    return token_ids, topology_map, log_probs, None
 
 
 # =============================================================================
@@ -720,15 +720,12 @@ class TargetEngine:
                 draft_probs = torch.exp(
                     torch.tensor(flat_log_probs, dtype=torch.float32, device=self.device)
                 )
-                draft_probs_full_stacked = None
-                if flat_draft_probs_full is not None:
-                    draft_probs_full_stacked = torch.stack(flat_draft_probs_full, dim=0)
                 result_data = verify_stochastic_tree(
                     draft_tokens=draft_tokens_tensor,
                     draft_probs=draft_probs,
                     target_probs=target_probs,
                     topology_map=topology_map,
-                    draft_probs_full=draft_probs_full_stacked,
+                    draft_probs_full=flat_draft_probs_full,
                 )
             else:
                 # Fallback to pure greedy verification
