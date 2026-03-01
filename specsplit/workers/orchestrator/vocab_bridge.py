@@ -63,13 +63,7 @@ class VocabBridge:
             else:
                 self._draft_to_target[draft_id] = self.target_unk_token
         
-        # Ensure minimum identity fallback
-        min_vocab = min(self.draft_vocab_size, self.target_vocab_size)
-        for i in range(min_vocab):
-            if i not in self._draft_to_target:
-                self._draft_to_target[i] = i
-            if i not in self._target_to_draft:
-                self._target_to_draft[i] = i
+
 
     def draft_to_target_id(self, draft_id: int) -> int:
         """Map a draft token ID to its closest target token ID."""

@@ -382,10 +382,13 @@ class ConversationSession:
                 from specsplit.proto import spec_decoding_pb2
 
                 end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
-                # Attempt to run synchronously if we aren't in a running loop, otherwise block via thread?
-                # The pipeline already has `_call_flush_target_cache` but we are sync here.
-                # Easiest way is to just call the stub and ignore the awaitable.
-                end_resp = self.orchestrator._target_stub.EndSession(end_req)
+                end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
+                coro = self.orchestrator._target_stub.EndSession(end_req)
+                try:
+                    loop = asyncio.get_running_loop()
+                    loop.create_task(coro)
+                except RuntimeError:
+                    asyncio.run(coro)
                 logger.debug("ConversationSession %s ended.", self.session_id)
             except Exception:
                 logger.debug("ConversationSession %s cleanup failed (non-critical).", self.session_id)

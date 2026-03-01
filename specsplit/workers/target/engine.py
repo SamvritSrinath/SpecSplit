@@ -36,7 +36,7 @@ from specsplit.core.verification import (
     verify_greedy_tree,
     verify_stochastic_tree,
 )
-from specsplit.workers.target.kv_cache import StaticKVCache
+from specsplit.workers.target.kv_cache import StaticKVCache, VirtualKVCache
 from specsplit.workers.target.tree_attn import (
     bool_mask_to_float,
     build_tree_attention,
@@ -97,7 +97,7 @@ class KVCacheState:
             upon a cache hit without duplicate forwarding.
     """
 
-    cache: StaticKVCache | None = None
+    cache: VirtualKVCache | None = None
     seq_len: int = 0
     next_root_logit: torch.Tensor | None = None
     last_accessed: float = 0.0  # D3: timestamp for TTL garbage collection
@@ -133,62 +133,6 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
         )
     return None
 
-
-def _flatten_tree(
-    draft_tree: list[dict[str, Any]], vocab_size: int, device: torch.device, dtype: torch.dtype
-) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
-    """Flatten a dict-based draft tree into parallel token-ID and topology arrays.
-
-    Performs a BFS traversal of the tree and assigns contiguous indices to each node.
-    When nodes have top_k_token_ids/top_k_probs, builds full draft distribution
-    for correct residual sampling.
-
-    Returns:
-        (token_ids, topology_map, log_probs, draft_probs_full or None).
-        draft_probs_full is a [num_nodes, vocab_size] tensor if top-k
-        data is present; None otherwise (legacy single log_prob per node).
-    """
-    token_ids: list[int] = []
-    topology_map: list[int] = []
-    log_probs: list[float] = []
-    has_top_k = False
-
-    all_indices = []
-    all_values = []
-
-    queue: deque[tuple[dict[str, Any], int]] = deque()
-    for root in draft_tree:
-        queue.append((root, -1))
-
-    while queue:
-        node, parent_idx = queue.popleft()
-        current_idx = len(token_ids)
-        token_ids.append(node["token_id"])
-        topology_map.append(parent_idx)
-        log_probs.append(node.get("log_prob", 0.0))
-
-        top_k_ids = node.get("top_k_token_ids", [])
-        top_k_vals = node.get("top_k_probs", [])
-        
-        if top_k_ids and top_k_vals:
-            has_top_k = True
-            for tid, p in zip(top_k_ids, top_k_vals):
-                if 0 <= tid < vocab_size:
-                    all_indices.append([current_idx, tid])
-                    all_values.append(float(p))
-
-        for child in node.get("children", []):
-            queue.append((child, current_idx))
-
-    if has_top_k:
-        draft_probs_full = torch.zeros((len(token_ids), vocab_size), dtype=dtype, device=device)
-        if all_indices:
-            idx_tensor = torch.tensor(all_indices, dtype=torch.long, device=device)
-            val_tensor = torch.tensor(all_values, dtype=dtype, device=device)
-            draft_probs_full[idx_tensor[:, 0], idx_tensor[:, 1]] = val_tensor
-        return token_ids, topology_map, log_probs, draft_probs_full
-
-    return token_ids, topology_map, log_probs, None
 
 
 # =============================================================================
@@ -284,21 +228,21 @@ class TargetEngine:
     # StaticKVCache factory
     # --------------------------------------------------------------------- #
 
-    def _create_static_cache(self) -> StaticKVCache:
-        """Create a StaticKVCache initialized from the loaded model's config.
+    def _create_virtual_cache(self) -> VirtualKVCache:
+        """Create a VirtualKVCache initialized from the loaded model's config.
 
         Extracts ``num_hidden_layers``, ``num_key_value_heads`` (for GQA models)
         or ``num_attention_heads``, ``hidden_size``, and ``max_position_embeddings``
         from the model config to size the pre-allocated buffers.
 
         Returns:
-            A fresh :class:`StaticKVCache` sized for this model.
+            A fresh :class:`VirtualKVCache` sized for this model.
 
         Raises:
             RuntimeError: If the model has not been loaded.
         """
         if not self._is_loaded or self._model is None:
-            raise RuntimeError("Cannot create StaticKVCache before model is loaded.")
+            raise RuntimeError("Cannot create VirtualKVCache before model is loaded.")
 
         cfg = self._model.config
         num_layers = cfg.num_hidden_layers
@@ -307,7 +251,7 @@ class TargetEngine:
         head_dim = cfg.hidden_size // cfg.num_attention_heads
         max_seq_len = getattr(cfg, "max_position_embeddings", 4096)
 
-        return StaticKVCache(
+        return VirtualKVCache(
             num_layers=num_layers,
             num_heads=num_heads,
             max_seq_len=max_seq_len,
@@ -352,9 +296,9 @@ class TargetEngine:
                     "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
                 )
 
-            # Create a new session with a StaticKVCache
-            static_cache = self._create_static_cache() if self._is_loaded else None
-            cache = KVCacheState(cache=static_cache, last_accessed=time.time())
+            # Create a new session with a VirtualKVCache
+            virtual_cache = self._create_virtual_cache() if self._is_loaded else None
+            cache = KVCacheState(cache=virtual_cache, last_accessed=time.time())
             self._session_caches[session_id] = cache
             self._session_locks[session_id] = threading.Lock()
             logger.debug("Session cache created: %s", session_id)
@@ -455,7 +399,7 @@ class TargetEngine:
     ) -> None:
         """Compact the KV cache to only the accepted prefix + accepted path.
 
-        Uses :class:`StaticKVCache` for O(1) rollback (linear chains)
+        Uses :class:`VirtualKVCache` for O(1) rollback (linear chains)
         or ``compact()`` (branching trees with non-contiguous accepted
         positions).
 
@@ -498,7 +442,7 @@ class TargetEngine:
             return
 
         if accepted_tree_indices is not None and len(accepted_tree_indices) > 0:
-            # --- Branching tree compaction via StaticKVCache.compact() ---
+            # --- Branching tree compaction via VirtualKVCache.compact() ---
             prefix_indices = list(range(prefix_length))
             tree_global_indices = [prefix_length + i for i in accepted_tree_indices]
             keep_indices = prefix_indices + tree_global_indices
@@ -528,9 +472,12 @@ class TargetEngine:
     def verify_draft_tree(
         self,
         prompt_ids: list[int],
-        draft_tree: list[dict[str, Any]],
+        flat_token_ids: list[int],
+        topology_map: list[int],
+        flat_log_probs: list[float],
+        flat_draft_probs_full: torch.Tensor | None,
         session_id: str | None = None,
-        temperature: float = 0.0,  # <-- Added temperature
+        temperature: float = 0.0,
         expected_prefix_length: int = 0,
     ) -> VerificationResult:
         """Verify a draft token tree against the target model's distribution.
@@ -540,17 +487,18 @@ class TargetEngine:
         automatically rolled back to the accepted prefix.
 
         The verification pipeline:
-            1. Flatten the draft tree into ``(token_ids, topology_map)``.
-            2. Build a tree-attention mask via ``build_tree_attention()``.
-            3. Forward pass the tree tokens through the target model
+            1. Build a tree-attention mask via ``build_tree_attention()``.
+            2. Forward pass the tree tokens through the target model
                with cached KV state (prefix is not recomputed on cache hit).
-            4. Run ``verify_greedy_tree()`` on the tree logits.
-            5. Roll back the KV cache to the accepted prefix.
+            3. Run ``verify_greedy_tree()`` on the tree logits.
+            4. Roll back the KV cache to the accepted prefix.
 
         Args:
             prompt_ids: Original prompt token IDs.
-            draft_tree: Draft tree as a list of dicts (from ``TokenNode.to_dict()``).
-                Each dict has keys ``token_id``, ``log_prob``, ``children``.
+            flat_token_ids: Flattened list of draft token IDs.
+            topology_map: Parent indices for each node in flat_token_ids.
+            flat_log_probs: Log probabilities for the draft tokens.
+            flat_draft_probs_full: Full draft probabilities if top-k is used.
             session_id: Optional session ID for KV cache reuse.  If ``None``,
                 verification is fully stateless (no caching).
 
@@ -574,7 +522,7 @@ class TargetEngine:
             session_lock.acquire()
         try:
             # --- Handle empty tree (no draft tokens) ---
-            if not draft_tree:
+            if not flat_token_ids:
                 sw.stop()
                 return VerificationResult(
                     accepted_token_ids=[],
@@ -584,11 +532,6 @@ class TargetEngine:
                     cache_hit=cache_hit,
                 )
 
-            # --- Step 1: Flatten tree → (token_ids, topology_map, log_probs, draft_probs_full) ---
-            vocab_size = self._model.config.vocab_size
-            flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = _flatten_tree(
-                draft_tree, vocab_size, self.device, self._model.dtype
-            )
             num_tree_nodes = len(flat_token_ids)
 
             # --- Step 2: Determine what to feed the model ---
@@ -673,10 +616,10 @@ class TargetEngine:
             # --- Step 5: Update session cache ---
             if cache_state is not None and cache_state.cache is not None:
                 if past_kv is None:
-                    # Init miss: model returned a new HF cache; inject into StaticKVCache.
+                    # Init miss: model returned a new HF cache; inject into VirtualKVCache.
                     hf_past_kv = _to_legacy_cache(outputs.past_key_values)
                     if hf_past_kv is not None:
-                        new_keys, new_values = StaticKVCache.stack_hf_cache(hf_past_kv)
+                        new_keys, new_values = VirtualKVCache.stack_hf_cache(hf_past_kv)
                         cache_state.cache.append(new_keys, new_values)
                 cache_state.seq_len = cache_state.cache.seq_len
 
@@ -770,41 +713,22 @@ class TargetEngine:
                         prefix_length=prefix_length,
                     )
 
-                if correction is not None and correction >= 0:
-                    correction_input = torch.tensor([[correction]], dtype=torch.long, device=self.device)
-
-                    # Pass StaticKVCache directly — model updates it in-place.
-                    corr_kv = cache_state.cache
-
-                    with torch.no_grad():
-                        correction_output = self._model(
-                            input_ids=correction_input,
-                            past_key_values=corr_kv,
-                            use_cache=True,
-                        )
-                    # Cache already updated in-place by model
-                    cache_state.seq_len = cache_state.cache.seq_len
-                    cache_state.next_root_logit = correction_output.logits[0, -1, :].detach().clone()
+                if num_accepted > 0:
+                    cache_state.next_root_logit = all_logits[0, base + leaf_idx, :].detach().clone()
                 else:
-                    if num_accepted > 0:
-                        if cache_hit:
-                            cache_state.next_root_logit = all_logits[0, leaf_idx, :].detach().clone()
-                        else:
-                            cache_state.next_root_logit = all_logits[0, prefix_length + leaf_idx, :].detach().clone()
+                    # Fix Bug 2: Total rejection (num_accepted==0, correction is None).
+                    # On cache hit, all_logits has only tree rows [0..num_tree_nodes-1];
+                    # row 0 predicts what follows the first tree token (root). Use it
+                    # so the next round has valid next_root_logit (avoiding OOB when
+                    # next_root_logit was None and elif prefix_length>0 used wrong index).
+                    if cache_hit:
+                        cache_state.next_root_logit = all_logits[0, 0, :].detach().clone()
+                    elif prefix_length > 0:
+                        cache_state.next_root_logit = all_logits[
+                            0, prefix_length - 1, :
+                        ].detach().clone()
                     else:
-                        # Fix Bug 2: Total rejection (num_accepted==0, correction is None).
-                        # On cache hit, all_logits has only tree rows [0..num_tree_nodes-1];
-                        # row 0 predicts what follows the first tree token (root). Use it
-                        # so the next round has valid next_root_logit (avoiding OOB when
-                        # next_root_logit was None and elif prefix_length>0 used wrong index).
-                        if cache_hit:
-                            cache_state.next_root_logit = all_logits[0, 0, :].detach().clone()
-                        elif prefix_length > 0:
-                            cache_state.next_root_logit = all_logits[
-                                0, prefix_length - 1, :
-                            ].detach().clone()
-                        else:
-                            cache_state.next_root_logit = None
+                        cache_state.next_root_logit = None
 
             sw.stop()
             return VerificationResult(

@@ -430,21 +430,14 @@ class DraftEngine:
                     else:
                         legacy_kvs.append(kv)
 
-                # 2. Vectorized batch: one stack over (beam, layer), then slice per layer.
-                # Replaces O(layers × 2) torch.cat calls with 2 stacks + native tensor slicing.
+                # 2. Vectorized batch: native torch.cat per layer over the batch dimension
+                # Replaces O(layers * batch) flat iterations and reshaping with direct layer concatenation
                 n_layers = len(legacy_kvs[0])
-                sample_k = legacy_kvs[0][0][0]
-                _, n_heads, seq_len, head_dim = sample_k.shape
-                flat_keys = [legacy_kvs[j][l][0] for j in range(total_items) for l in range(n_layers)]
-                flat_vals = [legacy_kvs[j][l][1] for j in range(total_items) for l in range(n_layers)]
-                keys_stack = torch.stack(flat_keys, dim=0).view(
-                    total_items, n_layers, 1, n_heads, seq_len, head_dim
-                )
-                vals_stack = torch.stack(flat_vals, dim=0).view(
-                    total_items, n_layers, 1, n_heads, seq_len, head_dim
-                )
                 batch_past_kv = tuple(
-                    (keys_stack[:, l].squeeze(1), vals_stack[:, l].squeeze(1))
+                    (
+                        torch.cat([legacy_kvs[j][l][0] for j in range(total_items)], dim=0),
+                        torch.cat([legacy_kvs[j][l][1] for j in range(total_items)], dim=0),
+                    )
                     for l in range(n_layers)
                 )
 

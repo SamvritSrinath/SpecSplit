@@ -8,10 +8,12 @@ KV caching.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from concurrent import futures
 from typing import Any
 
 import grpc
+import torch
 
 from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
@@ -26,34 +28,49 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
-    """Recursively convert a protobuf ``TokenNode`` to a plain Python dict.
+def _decode_proto_tree_direct(
+    proto_nodes: list[spec_decoding_pb2.TokenNode],
+    vocab_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
+    """Single-pass BFS: proto -> flat arrays. No intermediate dicts."""
+    token_ids: list[int] = []
+    topology_map: list[int] = []
+    log_probs: list[float] = []
+    all_indices: list[list[int]] = []
+    all_values: list[float] = []
+    has_top_k = False
 
-    The dict format matches what ``TargetEngine.verify_draft_tree`` expects:
-    ``{"token_id": int, "log_prob": float, "children": [...], "top_k_token_ids": [], "top_k_probs": []}``.
+    queue: deque[tuple[spec_decoding_pb2.TokenNode, int]] = deque()
+    for root in proto_nodes:
+        queue.append((root, -1))
 
-    Args:
-        node: A protobuf ``TokenNode`` message.
+    while queue:
+        node, parent_idx = queue.popleft()
+        current_idx = len(token_ids)
+        token_ids.append(node.token_id)
+        topology_map.append(parent_idx)
+        log_probs.append(node.log_prob)
 
-    Returns:
-        A plain dict representation of the node and its descendants.
-    """
-    top_k_ids = list(node.top_k_token_ids) if node.top_k_token_ids else []
-    top_k_probs = list(node.top_k_probs) if node.top_k_probs else []
-    return {
-        "token_id": node.token_id,
-        "log_prob": node.log_prob,
-        "children": [_from_proto_node(c) for c in node.children],
-        "top_k_token_ids": top_k_ids,
-        "top_k_probs": top_k_probs,
-    }
+        if node.top_k_token_ids and node.top_k_probs:
+            has_top_k = True
+            for tid, p in zip(node.top_k_token_ids, node.top_k_probs):
+                if 0 <= tid < vocab_size:
+                    all_indices.append([current_idx, tid])
+                    all_values.append(float(p))
 
+        for child in node.children:
+            queue.append((child, current_idx))
 
-def _count_tree_nodes(roots: list[dict[str, Any]]) -> int:
-    """Count total number of nodes in a tree represented as list of root dicts."""
-    return sum(
-        1 + _count_tree_nodes(n.get("children", [])) for n in roots
-    )
+    draft_probs_full = None
+    if has_top_k and all_indices:
+        draft_probs_full = torch.zeros((len(token_ids), vocab_size), dtype=dtype, device=device)
+        idx_t = torch.tensor(all_indices, dtype=torch.long, device=device)
+        val_t = torch.tensor(all_values, dtype=dtype, device=device)
+        draft_probs_full[idx_t[:, 0], idx_t[:, 1]] = val_t
+
+    return token_ids, topology_map, log_probs, draft_probs_full
 
 
 # ---------------------------------------------------------------------------
@@ -135,8 +152,22 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                     grpc.StatusCode.INVALID_ARGUMENT,
                     f"prompt length {len(prompt_ids)} exceeds max_prompt_tokens ({self._config.max_prompt_tokens})",
                 )
-            draft_tree: list[dict[str, Any]] = [_from_proto_node(n) for n in request.draft_tree]
-            num_nodes = _count_tree_nodes(draft_tree)
+
+            sw = Stopwatch()
+            sw.start()
+
+            vocab_size = self._engine._model.config.vocab_size if self._engine._is_loaded else 32000
+            device = self._engine.device
+            dtype = self._engine._model.dtype if self._engine._is_loaded else torch.float16
+
+            payload_bytes = request.ByteSize()
+            with self._telemetry.span("proto_decode") as decode_span:
+                flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = _decode_proto_tree_direct(
+                    request.draft_tree, vocab_size, device, dtype
+                )
+            proto_decode_ms = decode_span.elapsed_ms
+
+            num_nodes = len(flat_token_ids)
             if num_nodes > self._config.max_tree_nodes:
                 context.abort(
                     grpc.StatusCode.INVALID_ARGUMENT,
@@ -145,12 +176,13 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
 
             expected_prefix_length = int(getattr(request, "expected_prefix_length", 0) or 0)
 
-            sw = Stopwatch()
-            sw.start()
             try:
                 result = self._engine.verify_draft_tree(
                     prompt_ids,
-                    draft_tree,
+                    flat_token_ids,
+                    topology_map,
+                    flat_log_probs,
+                    flat_draft_probs_full,
                     session_id=session_id,
                     temperature=request.temperature,
                     expected_prefix_length=expected_prefix_length,
@@ -172,6 +204,14 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                 tokens_processed=num_nodes,
                 device=str(self._engine.device),
             )
+
+            # Store P-1 specific telemetry in span context metadata automatically
+            # Not added to protobuf to preserve schema, but injected into telemetry backend
+            import specsplit.core.telemetry as telemetry
+            ctx = telemetry.get_current_context()
+            if ctx is not None:
+                ctx.metadata["proto_decode_ms"] = proto_decode_ms
+                ctx.metadata["payload_bytes"] = payload_bytes
 
             # Issue 17 / 30: We must avoid conflating "no correction" (None -> 0)
             # with "correction token is 0". We will add a has_correction flag to proto.

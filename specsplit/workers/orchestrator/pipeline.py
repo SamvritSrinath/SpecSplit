@@ -109,6 +109,16 @@ class VerificationResult:
 
 
 @dataclass
+class PIDState:
+    integral: float = 0.0
+    prev_error: float = 0.0
+    kp: float = 2.0
+    ki: float = 0.5
+    kd: float = 0.1
+    setpoint: float = 0.7  # Target acceptance rate
+
+
+@dataclass
 class RoundMetrics:
     """Per-round metrics for fine-grained acceptance analysis."""
 
@@ -153,6 +163,7 @@ class SpeculativeState:
     recent_acceptance_rates: deque[float] = field(default_factory=lambda: deque(maxlen=5))
     is_fallback_mode: bool = False
     consecutive_low_acceptance: int = 0
+    pid: PIDState = field(default_factory=PIDState)
 
 
 @dataclass
@@ -706,7 +717,7 @@ async def run_speculative_loop_async(
         # prompt_token_ids to avoid redundantly transmitting the full
         # context. The target service's session cache already has the
         # prefix and only needs the new tokens.
-        verify_context = [] if delta_token_ids else current_context
+        verify_context = [] if delta_token_ids is not None else current_context
         verify_task = asyncio.create_task(
             _call_verify_drafts(
                 target_stub,
@@ -850,6 +861,10 @@ async def run_speculative_loop_async(
             )
             # Simple approximation of payload serialization size
             ctx.metadata["payload_bytes"] = len(current_draft.token_ids) * 8 + len(current_context) * 4
+            ctx.metadata["rtt_ms_measured"] = actual_wait_ms
+            ctx.metadata["k_pid_error"] = state.pid.prev_error
+            ctx.metadata["k_pid_integral"] = state.pid.integral
+            ctx.metadata["current_k"] = state.current_k
 
         # --------------------------------------------------------------
         # Step B: Process verification result
@@ -879,30 +894,49 @@ async def run_speculative_loop_async(
         state.recent_acceptance_rates.append(round_acc)
         rolling_mean = sum(state.recent_acceptance_rates) / len(state.recent_acceptance_rates)
 
+        # Calculate dynamic fallback threshold (roughly alpha * 0.8)
+        # alpha is breakeven rate: proxy with actual measured RTT
+        measured_rtt = actual_wait_ms
+        t_target_approx = 15.0 # Rough approximation of target forward pass
+        breakeven_alpha = measured_rtt / t_target_approx if measured_rtt > 0 else 0.5
+        fallback_threshold = min(0.5, breakeven_alpha * 0.8)
+
         # PR-7 / PR-8: Dynamic K Adjustment and Fallback Mode
         # Only adjust after we have at least 3 samples
         if len(state.recent_acceptance_rates) >= 3:
             # PR-8: Fallback Circuit Breaker
-            if rolling_mean < 0.1:
+            if rolling_mean < fallback_threshold:
                 state.consecutive_low_acceptance += 1
                 if state.consecutive_low_acceptance >= 2:
                     if not state.is_fallback_mode:
-                        logger.warning("Acceptance rate collapsed (%.2f). Entering Fallback Mode.", rolling_mean)
+                        logger.warning("Acceptance rate collapsed (%.2f < %.2f). Entering Fallback Mode.", rolling_mean, fallback_threshold)
                     state.is_fallback_mode = True
             else:
                 state.consecutive_low_acceptance = 0
-                if state.is_fallback_mode and rolling_mean > 0.3:
+                if state.is_fallback_mode and rolling_mean > fallback_threshold + 0.1:
                     logger.info("Acceptance rate recovered (%.2f). Exiting Fallback Mode.", rolling_mean)
                     state.is_fallback_mode = False
 
-            # PR-7: Adaptive K
+            # PR-7: Adaptive K using PID
             if not state.is_fallback_mode:
-                if rolling_mean > 0.8 and state.current_k < cfg.max_draft_tokens:
-                    state.current_k = min(state.current_k + 2, cfg.max_draft_tokens)
-                    logger.debug("High acceptance (%.2f), increasing K to %d", rolling_mean, state.current_k)
-                elif rolling_mean < 0.4 and state.current_k > 1:
-                    state.current_k = max(state.current_k - 2, 1)
-                    logger.debug("Low acceptance (%.2f), decreasing K to %d", rolling_mean, state.current_k)
+                error = rolling_mean - state.pid.setpoint
+                state.pid.integral += error
+                derivative = error - state.pid.prev_error
+                
+                adjustment = (
+                    state.pid.kp * error +
+                    state.pid.ki * state.pid.integral +
+                    state.pid.kd * derivative
+                )
+                state.pid.prev_error = error
+                
+                # Apply adjustment
+                new_k = int(round(state.current_k + adjustment))
+                new_k = max(1, min(new_k, cfg.max_draft_tokens))
+                
+                if new_k != state.current_k:
+                    logger.debug("PID adjusted K: %d -> %d (err=%.2f, adj=%.2f)", state.current_k, new_k, error, adjustment)
+                    state.current_k = new_k
 
         # Append accepted tokens and bonus token to output
         new_tokens = list(verify_result.accepted_tokens)
@@ -921,8 +955,13 @@ async def run_speculative_loop_async(
         state.generated_tokens.extend(new_tokens)
         # Context for next round is only verified output (never speculative draft).
         current_context = list(prompt_ids) + state.generated_tokens
-        # Issue 11: Update verified_context_len for delta-only transmission
-        verified_context_len = len(current_context)
+        
+        # Issue 11 & PR-2 Fix: Update verified_context_len for delta-only transmission.
+        # The target's seq_len ONLY includes the accepted tokens, NOT the bonus token
+        # (which is sent to the target as a delta in the NEXT round). So we must align 
+        # expected_prefix_length to maintain perfect sync with the Target KV Cache.
+        bonus_count = 1 if verify_result.bonus_token is not None else 0
+        verified_context_len = len(current_context) - bonus_count
 
         logger.info(
             "Round %d: accepted %d/%d (path_depth=%d, tree_nodes=%d), bonus=%s, total_output=%d",
