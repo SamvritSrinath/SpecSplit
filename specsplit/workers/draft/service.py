@@ -12,7 +12,7 @@ from concurrent import futures
 import grpc
 
 from specsplit.core.config import DraftWorkerConfig
-from specsplit.core.telemetry import TelemetryLogger
+from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.draft.engine import DraftEngine, TokenNode
 
@@ -37,7 +37,14 @@ def _to_proto_node(node: TokenNode) -> spec_decoding_pb2.TokenNode:
         token_id=node.token_id,
         log_prob=node.log_prob,
         children=[_to_proto_node(c) for c in node.children],
+        top_k_token_ids=node.top_k_token_ids,
+        top_k_probs=node.top_k_probs,
     )
+
+
+def _count_nodes(node: TokenNode) -> int:
+    """Count all descendant nodes (excluding self) in a TokenNode tree."""
+    return sum(1 + _count_nodes(c) for c in node.children)
 
 
 # ---------------------------------------------------------------------------
@@ -82,23 +89,58 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
             request_id=request.request_id,
             max_draft_len=request.max_draft_len,
         ):
+            # Issue 9: Invalidate draft KV cache on speculation miss
+            if request.reset_cache:
+                self._engine.reset_cache(
+                    session_id=request.session_id or None,
+                )
+                logger.info("Draft KV cache reset (reset_cache=True)")
+
             prompt_ids: list[int] = list(request.prompt_token_ids)
+            sw = Stopwatch()
+            sw.start()
+            # Use request values. For temperature: proto3 optional + HasField
+            # distinguish explicit 0 (greedy) from unset (use config default).
+            k = request.max_draft_len if request.max_draft_len > 0 else None
+            num_beams = request.num_beams if request.num_beams > 0 else None
+            if getattr(request, "HasField", lambda _: False)("temperature"):
+                temp = request.temperature  # Explicit: 0 = greedy, >0 = stochastic
+            else:
+                temp = None  # Unset: use config.temperature
+
             roots: list[TokenNode] = self._engine.generate_draft_tree(
                 prompt_ids=prompt_ids,
-                k=request.max_draft_len or None,
-                num_beams=request.num_beams or None,
-                temperature=request.temperature,
+                k=k,
+                num_beams=num_beams,
+                temperature=temp,
+                session_id=request.session_id or None,
+            )
+            sw.stop()
+
+            # Issue 8: Populate TelemetryMetadata with server-side timing
+            telemetry_meta = spec_decoding_pb2.TelemetryMetadata(
+                span_id=request.request_id,
+                wall_time_ms=sw.elapsed_ms,
+                model_time_ms=sw.elapsed_ms,
+                tokens_processed=sum(1 + _count_nodes(r) for r in roots),
+                device=str(self._engine.device),
             )
 
             response = spec_decoding_pb2.DraftResponse(
                 request_id=request.request_id,
                 draft_tree=[_to_proto_node(r) for r in roots],
+                telemetry=telemetry_meta,
             )
 
+            effective_k = k or self._engine.config.max_draft_tokens
+            effective_temp = temp if temp is not None else self._engine.config.temperature
             logger.info(
-                "GenerateDrafts completed: request_id=%s, roots=%d",
+                "GenerateDrafts completed: request_id=%s, roots=%d, k=%d, temp=%.2f, model_ms=%.1f",
                 request.request_id,
                 len(roots),
+                effective_k,
+                effective_temp,
+                sw.elapsed_ms,
             )
             return response
 

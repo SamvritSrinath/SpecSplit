@@ -8,15 +8,17 @@ KV caching.
 from __future__ import annotations
 
 import logging
+from collections import deque
 from concurrent import futures
 from typing import Any
 
 import grpc
+import torch
 
 from specsplit.core.config import TargetWorkerConfig
-from specsplit.core.telemetry import TelemetryLogger
+from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
-from specsplit.workers.target.engine import TargetEngine
+from specsplit.workers.target.engine import CacheDesyncError, TargetEngine
 
 logger = logging.getLogger(__name__)
 
@@ -26,30 +28,49 @@ logger = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 
-def _from_proto_node(node: spec_decoding_pb2.TokenNode) -> dict[str, Any]:
-    """Recursively convert a protobuf ``TokenNode`` to a plain Python dict.
+def _decode_proto_tree_direct(
+    proto_nodes: list[spec_decoding_pb2.TokenNode],
+    vocab_size: int,
+    device: torch.device,
+    dtype: torch.dtype,
+) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
+    """Single-pass BFS: proto -> flat arrays. No intermediate dicts."""
+    token_ids: list[int] = []
+    topology_map: list[int] = []
+    log_probs: list[float] = []
+    all_indices: list[list[int]] = []
+    all_values: list[float] = []
+    has_top_k = False
 
-    The dict format matches what ``TargetEngine.verify_draft_tree`` expects:
-    ``{"token_id": int, "log_prob": float, "children": [...]}``.
+    queue: deque[tuple[spec_decoding_pb2.TokenNode, int]] = deque()
+    for root in proto_nodes:
+        queue.append((root, -1))
 
-    Args:
-        node: A protobuf ``TokenNode`` message.
+    while queue:
+        node, parent_idx = queue.popleft()
+        current_idx = len(token_ids)
+        token_ids.append(node.token_id)
+        topology_map.append(parent_idx)
+        log_probs.append(node.log_prob)
 
-    Returns:
-        A plain dict representation of the node and its descendants.
-    """
-    return {
-        "token_id": node.token_id,
-        "log_prob": node.log_prob,
-        "children": [_from_proto_node(c) for c in node.children],
-    }
+        if node.top_k_token_ids and node.top_k_probs:
+            has_top_k = True
+            for tid, p in zip(node.top_k_token_ids, node.top_k_probs):
+                if 0 <= tid < vocab_size:
+                    all_indices.append([current_idx, tid])
+                    all_values.append(float(p))
 
+        for child in node.children:
+            queue.append((child, current_idx))
 
-def _count_tree_nodes(roots: list[dict[str, Any]]) -> int:
-    """Count total number of nodes in a tree represented as list of root dicts."""
-    return sum(
-        1 + _count_tree_nodes(n.get("children", [])) for n in roots
-    )
+    draft_probs_full = None
+    if has_top_k and all_indices:
+        draft_probs_full = torch.zeros((len(token_ids), vocab_size), dtype=dtype, device=device)
+        idx_t = torch.tensor(all_indices, dtype=torch.long, device=device)
+        val_t = torch.tensor(all_values, dtype=dtype, device=device)
+        draft_probs_full[idx_t[:, 0], idx_t[:, 1]] = val_t
+
+    return token_ids, topology_map, log_probs, draft_probs_full
 
 
 # ---------------------------------------------------------------------------
@@ -105,40 +126,116 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             session_id=session_id or "stateless",
         ):
             prompt_ids: list[int] = list(request.prompt_token_ids)
-            if len(prompt_ids) > self._config.max_prompt_tokens:
+            new_ids: list[int] = list(getattr(request, "new_token_ids", []))
+
+            # Bug 3: Delta-only mode — when prompt_token_ids is empty but
+            # new_token_ids is populated, the orchestrator is sending only
+            # the delta. The target engine's session cache already has the
+            # prefix and only needs the new tokens appended.
+            #
+            # CRITICAL GUARD: If the session was evicted (TTL or LRU), the
+            # engine no longer has the prefix. Using only the 2-3 delta
+            # tokens as the full prompt would cause the 70B model to
+            # verify against a nonsensical context, producing garbage.
+            if not prompt_ids and new_ids:
+                with self._engine._session_dict_lock:
+                    if not session_id or session_id not in self._engine._session_caches:
+                        context.abort(
+                            grpc.StatusCode.FAILED_PRECONDITION,
+                            "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
+                            "orchestrator must retry with full context",
+                        )
+                prompt_ids = new_ids
+
+            if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
                 context.abort(
                     grpc.StatusCode.INVALID_ARGUMENT,
                     f"prompt length {len(prompt_ids)} exceeds max_prompt_tokens ({self._config.max_prompt_tokens})",
                 )
-            draft_tree: list[dict[str, Any]] = [_from_proto_node(n) for n in request.draft_tree]
-            num_nodes = _count_tree_nodes(draft_tree)
+
+            sw = Stopwatch()
+            sw.start()
+
+            vocab_size = self._engine._model.config.vocab_size if self._engine._is_loaded else 32000
+            device = self._engine.device
+            dtype = self._engine._model.dtype if self._engine._is_loaded else torch.float16
+
+            payload_bytes = request.ByteSize()
+            with self._telemetry.span("proto_decode") as decode_span:
+                flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = _decode_proto_tree_direct(
+                    request.draft_tree, vocab_size, device, dtype
+                )
+            proto_decode_ms = decode_span.elapsed_ms
+
+            num_nodes = len(flat_token_ids)
             if num_nodes > self._config.max_tree_nodes:
                 context.abort(
                     grpc.StatusCode.INVALID_ARGUMENT,
                     f"draft tree has {num_nodes} nodes, exceeds max_tree_nodes ({self._config.max_tree_nodes})",
                 )
 
-            result = self._engine.verify_draft_tree(
-                prompt_ids,
-                draft_tree,
-                session_id=session_id,
+            expected_prefix_length = int(getattr(request, "expected_prefix_length", 0) or 0)
+
+            try:
+                result = self._engine.verify_draft_tree(
+                    prompt_ids,
+                    flat_token_ids,
+                    topology_map,
+                    flat_log_probs,
+                    flat_draft_probs_full,
+                    session_id=session_id,
+                    temperature=request.temperature,
+                    expected_prefix_length=expected_prefix_length,
+                )
+            except CacheDesyncError as e:
+                sw.stop()
+                logger.warning("CacheDesyncError in engine: %s", str(e))
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    str(e),
+                )
+            sw.stop()
+
+            # Issue 8: Populate TelemetryMetadata with server-side timing
+            telemetry_meta = spec_decoding_pb2.TelemetryMetadata(
+                span_id=request.request_id,
+                wall_time_ms=sw.elapsed_ms,
+                model_time_ms=sw.elapsed_ms,
+                tokens_processed=num_nodes,
+                device=str(self._engine.device),
             )
+
+            # Store P-1 specific telemetry in span context metadata automatically
+            # Not added to protobuf to preserve schema, but injected into telemetry backend
+            import specsplit.core.telemetry as telemetry
+            ctx = telemetry.get_current_context()
+            if ctx is not None:
+                ctx.metadata["proto_decode_ms"] = proto_decode_ms
+                ctx.metadata["payload_bytes"] = payload_bytes
+
+            # Issue 17 / 30: We must avoid conflating "no correction" (None -> 0)
+            # with "correction token is 0". We will add a has_correction flag to proto.
+            has_corr = result.correction_token_id is not None
 
             response = spec_decoding_pb2.VerifyResponse(
                 request_id=request.request_id,
                 accepted_token_ids=result.accepted_token_ids,
-                correction_token_id=result.correction_token_id or 0,
+                correction_token_id=result.correction_token_id if has_corr else 0,
+                has_correction=has_corr,
                 num_accepted=result.num_accepted,
                 session_id=session_id or "",
                 cache_hit=result.cache_hit,
+                telemetry=telemetry_meta,
             )
 
             logger.info(
-                "VerifyDrafts completed: request_id=%s, session=%s, cache_hit=%s, accepted=%d",
+                "VerifyDrafts completed: request_id=%s, session=%s, cache_hit=%s, "
+                "accepted=%d, model_ms=%.1f",
                 request.request_id,
                 session_id or "none",
                 result.cache_hit,
                 result.num_accepted,
+                sw.elapsed_ms,
             )
             return response
 

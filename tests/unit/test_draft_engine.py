@@ -27,12 +27,13 @@ def _make_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> Mag
         logits = torch.zeros(batch, seq_len, vocab_size)
         logits[:, :, deterministic_token] = 10.0  # argmax → deterministic_token
 
-        # Fake KV cache: 2 layers
+        # Fake KV cache: 2 layers, batch size must match input for batched beam slicing
         cache_len = seq_len
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -77,7 +78,8 @@ def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 4
         if past_key_values is not None:
             cache_len += past_key_values[0][0].shape[2]
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -223,15 +225,16 @@ class TestDraftEngineKVCache:
         engine = DraftEngine(config=draft_config)
         engine.load_model()
 
-        assert engine._kv_cache is None
-        assert engine._cached_prompt_len == 0
-        assert engine._cached_last_logits is None
+        assert engine._default_cache.kv_cache is None
+        assert engine._default_cache.cached_prompt_len == 0
+        assert engine._default_cache.cached_last_logits is None
 
         engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
 
-        assert engine._kv_cache is not None
-        assert engine._cached_prompt_len == 3
-        assert engine._cached_last_logits is not None
+        assert engine._default_cache.kv_cache is not None
+        assert engine._default_cache.cached_prompt_len == 3
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3]
+        assert engine._default_cache.cached_last_logits is not None
 
     @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
@@ -259,7 +262,8 @@ class TestDraftEngineKVCache:
 
         assert null_kv_after_round1 == 1  # Round 1 did one full prefix recompute
         assert null_kv_after_round2 == 1  # Round 2 added no from-scratch calls
-        assert engine._cached_prompt_len == 5
+        assert engine._default_cache.cached_prompt_len == 5
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3, 42, 42]
 
     @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
@@ -304,12 +308,14 @@ class TestDraftEngineKVCache:
         engine.load_model()
 
         engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
-        assert engine._kv_cache is not None
-        assert engine._cached_prompt_len == 3
-        assert engine._cached_last_logits is not None
+        assert engine._default_cache.kv_cache is not None
+        assert engine._default_cache.cached_prompt_len == 3
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3]
+        assert engine._default_cache.cached_last_logits is not None
 
         engine.reset_cache()
 
-        assert engine._kv_cache is None
-        assert engine._cached_prompt_len == 0
-        assert engine._cached_last_logits is None
+        assert engine._default_cache.kv_cache is None
+        assert engine._default_cache.cached_prompt_len == 0
+        assert engine._default_cache.cached_prompt_ids == []
+        assert engine._default_cache.cached_last_logits is None

@@ -48,6 +48,10 @@ message TokenNode {
   int32  token_id    = 1;  // Vocabulary index of the candidate token.
   float  log_prob    = 2;  // Log-probability assigned by the draft model.
   repeated TokenNode children = 3;  // Child candidates (branching factor).
+  // Top-K draft distribution for correct residual sampling (covers ~99% mass).
+  // When present, residual = max(0, P_target - P_draft) for full vocabulary.
+  repeated int32 top_k_token_ids = 4;  // Token IDs in descending prob order.
+  repeated float top_k_probs     = 5;  // Corresponding probabilities (same order).
 }
 
 // =============================================================================
@@ -60,7 +64,11 @@ message DraftRequest {
   repeated int32 prompt_token_ids = 2;  // Tokenized prompt context.
   int32   max_draft_len  = 3;  // Maximum tree depth (K).
   int32   num_beams      = 4;  // Branching factor at each level.
-  float   temperature    = 5;  // Sampling temperature for draft generation.
+  optional float temperature = 5;  // Sampling temperature (0 = greedy). Use HasField to distinguish unset from 0.
+  bool    reset_cache    = 6;  // If true, clear draft KV cache before generating
+                               // (used after speculation misses).
+  string  session_id     = 7;  // Session ID for per-session KV cache isolation.
+                               // Required for thread-safe concurrent requests.
 }
 
 // Response containing the generated draft tree.
@@ -77,10 +85,18 @@ message DraftResponse {
 // Request to verify a draft tree against the target model.
 message VerifyRequest {
   string  request_id     = 1;  // Unique request identifier for tracing.
-  repeated int32 prompt_token_ids = 2;  // Original prompt context.
+  repeated int32 prompt_token_ids = 2;  // Full prompt context (sent on round 0 or after cache flush).
   repeated TokenNode draft_tree    = 3;  // Draft tree to verify.
   string  session_id     = 4;  // Session ID for KV cache reuse across rounds.
                                // If empty, verification is stateless (no caching).
+  float   temperature    = 5;  // Sampling temperature for verification.
+                               // 0.0 = greedy, >0.0 = stochastic rejection sampling.
+  repeated int32 new_token_ids = 6;  // Delta tokens since last verified position.
+                                     // When non-empty, replaces prompt_token_ids for
+                                     // context reconstruction (Issue 11 optimisation).
+  int32 expected_prefix_length = 7;  // Orchestrator's prompt+generated length.
+                                     // Target validates cache_state.seq_len == this;
+                                     // if mismatch, force cache flush and rebuild.
 }
 
 // Response containing verification results.
@@ -88,6 +104,7 @@ message VerifyResponse {
   string  request_id        = 1;  // Echo of the request identifier.
   repeated int32 accepted_token_ids = 2;  // Longest accepted prefix from the tree.
   int32   correction_token_id = 3;  // Correction token sampled from target (if draft rejected).
+  bool    has_correction      = 8;  // True if correction_token_id is valid (avoids token 0 conflation).
   int32   num_accepted       = 4;  // Number of draft tokens accepted.
   TelemetryMetadata telemetry = 5;  // Server-side timing information.
   string  session_id        = 6;  // Echo of session ID (confirms cache association).

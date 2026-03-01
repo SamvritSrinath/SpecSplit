@@ -12,8 +12,8 @@ from specsplit.workers.target.engine import (
     KVCacheState,
     TargetEngine,
     VerificationResult,
-    _flatten_tree,
 )
+from specsplit.workers.target.kv_cache import VirtualKVCache
 
 
 @pytest.fixture
@@ -26,6 +26,28 @@ def target_engine() -> TargetEngine:
         max_sessions=3,
     )
     return TargetEngine(config=config)
+
+
+@pytest.fixture
+def fake_static_kv_cache() -> VirtualKVCache:
+    """A VirtualKVCache with 2 layers, 4 heads, max_seq_len=64, head_dim=8.
+
+    Pre-populated with 10 random entries to simulate an in-use cache.
+    """
+    cache = VirtualKVCache(
+        num_layers=2,
+        num_heads=4,
+        max_seq_len=64,
+        head_dim=8,
+        batch_size=1,
+        dtype=torch.float32,
+        device=torch.device("cpu"),
+    )
+    # Populate with 10 positions of random data
+    keys = torch.randn(2, 1, 4, 10, 8)
+    values = torch.randn(2, 1, 4, 10, 8)
+    cache.append(keys, values)
+    return cache
 
 
 @pytest.fixture
@@ -59,6 +81,14 @@ def _make_mock_target_model(
     model.eval.return_value = model
     model.to.return_value = model
 
+    # Add model config for StaticKVCache initialization
+    model.config = MagicMock()
+    model.config.num_hidden_layers = 2
+    model.config.num_attention_heads = 4
+    model.config.num_key_value_heads = 4
+    model.config.hidden_size = 32  # 4 heads * 8 head_dim
+    model.config.max_position_embeddings = 512
+
     accept_list = accept_tokens or []
 
     def fake_forward(
@@ -78,12 +108,30 @@ def _make_mock_target_model(
             else:
                 logits[0, i, 0] = 10.0  # default: predict token 0
 
-        # Fake KV cache
+        # When given StaticKVCache, simulate in-place update and return it
+        if past_key_values is not None and hasattr(past_key_values, "append"):
+            new_len = seq_len
+            if new_len > 0:
+                keys = torch.zeros(2, batch, 4, new_len, 8, dtype=torch.float16)
+                values = torch.zeros(2, batch, 4, new_len, 8, dtype=torch.float16)
+                past_key_values.append(keys, values)
+            out = MagicMock()
+            out.logits = logits
+            out.past_key_values = past_key_values
+            return out
+
+        # Legacy path: fake tuple KV cache
         cache_len = seq_len
         if past_key_values is not None:
-            cache_len += past_key_values[0][0].shape[2]
+            if isinstance(past_key_values, tuple):
+                cache_len += past_key_values[0][0].shape[2]
+            elif hasattr(past_key_values, "get_seq_length"):
+                cache_len += past_key_values.get_seq_length()
+            elif hasattr(past_key_values, "seq_len"):
+                cache_len += past_key_values.seq_len
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16), torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -104,68 +152,7 @@ def _make_mock_tokenizer() -> MagicMock:
     return tokenizer
 
 
-# =========================================================================
-# Flatten Tree Helper Tests
-# =========================================================================
 
-
-class TestFlattenTree:
-    """Tests for the _flatten_tree helper."""
-
-    def test_single_chain(self) -> None:
-        """A linear chain should flatten to sequential indices."""
-        tree = [
-            {
-                "token_id": 10,
-                "log_prob": -0.1,
-                "children": [
-                    {
-                        "token_id": 20,
-                        "log_prob": -0.2,
-                        "children": [{"token_id": 30, "log_prob": -0.3, "children": []}],
-                    }
-                ],
-            }
-        ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
-        assert token_ids == [10, 20, 30]
-        assert topology == [-1, 0, 1]
-        assert log_probs == [-0.1, -0.2, -0.3]
-
-    def test_branching_tree(self) -> None:
-        """A tree with branching should produce correct parent indices."""
-        tree = [
-            {
-                "token_id": 10,
-                "log_prob": -0.1,
-                "children": [
-                    {"token_id": 20, "log_prob": -0.2, "children": []},
-                    {"token_id": 30, "log_prob": -0.3, "children": []},
-                ],
-            }
-        ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
-        assert token_ids == [10, 20, 30]
-        assert topology == [-1, 0, 0]
-        assert log_probs == [-0.1, -0.2, -0.3]
-
-    def test_empty_tree(self) -> None:
-        """An empty tree should produce empty lists."""
-        token_ids, topology, log_probs = _flatten_tree([])
-        assert token_ids == []
-        assert topology == []
-        assert log_probs == []
-
-    def test_multiple_roots(self) -> None:
-        """Multiple root nodes should each have parent -1."""
-        tree = [
-            {"token_id": 10, "log_prob": -0.1, "children": []},
-            {"token_id": 20, "log_prob": -0.2, "children": []},
-        ]
-        token_ids, topology, log_probs = _flatten_tree(tree)
-        assert token_ids == [10, 20]
-        assert topology == [-1, -1]
-        assert log_probs == [-0.1, -0.2]
 
 
 # =========================================================================
@@ -236,57 +223,53 @@ class TestSessionManagement:
 
 
 class TestRollbackCache:
-    """Tests for rollback_cache — cropping KV tensors to accepted prefix."""
+    """Tests for rollback_cache — using StaticKVCache O(1) rollback and compact."""
 
     def test_rollback_crops_tensors(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: VirtualKVCache,
     ) -> None:
-        """Rollback should slice each layer's K/V to accepted_depth."""
+        """Rollback should set the StaticKVCache seq_len to accepted_depth."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=6)
 
         assert cache.seq_len == 6
-        for layer_k, layer_v in cache.past_key_values:
-            assert layer_k.shape[2] == 6
-            assert layer_v.shape[2] == 6
+        assert cache.cache.seq_len == 6
 
     def test_rollback_to_zero(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: VirtualKVCache,
     ) -> None:
-        """Rolling back to 0 should produce zero-length seq dim."""
+        """Rolling back to 0 should set seq_len to 0."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=0)
         assert cache.seq_len == 0
-        for layer_k, _layer_v in cache.past_key_values:
-            assert layer_k.shape[2] == 0
+        assert cache.cache.seq_len == 0
 
     def test_rollback_noop_same_depth(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: VirtualKVCache,
     ) -> None:
         """Rollback to current seq_len should be a no-op."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         target_engine.rollback_cache("sess-1", accepted_depth=10)
         assert cache.seq_len == 10
-        for layer_k, _ in cache.past_key_values:
-            assert layer_k.shape[2] == 10
+        assert cache.cache.seq_len == 10
 
     def test_rollback_no_cache_state(self, target_engine: TargetEngine) -> None:
-        """Rollback on a session with no past_key_values should reset to 0."""
+        """Rollback on a session with no StaticKVCache should reset to 0."""
         target_engine.get_or_create_session("sess-1")
         target_engine.rollback_cache("sess-1", accepted_depth=0)
         assert target_engine._session_caches["sess-1"].seq_len == 0
@@ -298,10 +281,10 @@ class TestRollbackCache:
     def test_rollback_exceeds_seq_len_raises(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: VirtualKVCache,
     ) -> None:
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
         with pytest.raises(ValueError, match="exceeds cached seq_len"):
@@ -310,20 +293,41 @@ class TestRollbackCache:
     def test_rollback_preserves_data(
         self,
         target_engine: TargetEngine,
-        fake_kv_cache: tuple[tuple[torch.Tensor, torch.Tensor], ...],
+        fake_static_kv_cache: VirtualKVCache,
     ) -> None:
         """The cropped prefix should contain the original data, not zeros."""
         cache, _ = target_engine.get_or_create_session("sess-1")
-        cache.past_key_values = fake_kv_cache
+        cache.cache = fake_static_kv_cache
         cache.seq_len = 10
 
-        # Save original first 4 positions of layer 0 key
-        original_prefix = fake_kv_cache[0][0][:, :, :4, :].clone()
+        # Save original first 4 positions
+        original_keys = fake_static_kv_cache.get_all_kv()[0][0][:, :, :4, :].clone()
 
         target_engine.rollback_cache("sess-1", accepted_depth=4)
 
-        rolled_back_key = cache.past_key_values[0][0]
-        assert torch.allclose(rolled_back_key, original_prefix)
+        # After rollback, the first 4 positions should be preserved
+        rolled_keys = cache.cache.get_all_kv()[0][0][:, :, :4, :]
+        assert torch.allclose(rolled_keys, original_keys)
+
+    def test_compact_non_contiguous(
+        self,
+        target_engine: TargetEngine,
+        fake_static_kv_cache: VirtualKVCache,
+    ) -> None:
+        """Compact with non-contiguous indices for branching tree rollback."""
+        cache, _ = target_engine.get_or_create_session("sess-1")
+        cache.cache = fake_static_kv_cache
+        cache.seq_len = 10
+
+        # Keep prefix (0-4) + selected tree positions (6, 8)
+        target_engine.rollback_cache(
+            "sess-1",
+            accepted_depth=7,  # Not used when tree_indices provided
+            accepted_tree_indices=[1, 3],
+            prefix_length=5,
+        )
+        # Should keep: [0,1,2,3,4] (prefix) + [5+1, 5+3] = [0,1,2,3,4,6,8] = 7 positions
+        assert cache.seq_len == 7
 
 
 # =========================================================================
@@ -334,18 +338,15 @@ class TestRollbackCache:
 class TestVerifyWithMockedModel:
     """Tests for verify_draft_tree using a mocked target model."""
 
-    def _make_tree(self, token_ids: list[int]) -> list[dict]:
+    def _make_tree(self, token_ids: list[int]) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
         """Build a linear chain of token nodes for testing."""
         if not token_ids:
-            return []
-        nodes: list[dict] = []
-        current: dict = {"token_id": token_ids[0], "log_prob": -0.1, "children": []}
-        nodes.append(current)
-        for tid in token_ids[1:]:
-            child: dict = {"token_id": tid, "log_prob": -0.1, "children": []}
-            current["children"] = [child]
-            current = child
-        return nodes
+            return [], [], [], None
+        flat_token_ids = token_ids
+        topology_map = [-1] + list(range(len(token_ids) - 1))
+        flat_log_probs = [-0.1] * len(token_ids)
+        flat_draft_probs_full = None
+        return flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full
 
     @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
@@ -378,10 +379,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=tree,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id=None,
         )
 
@@ -413,10 +417,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=tree,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id=None,
         )
 
@@ -439,9 +446,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree([])
         result = engine.verify_draft_tree(
             prompt_ids=[1, 2],
-            draft_tree=[],
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id=None,
         )
 
@@ -469,10 +480,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=tree,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id="sess-A",
         )
         assert result.cache_hit is False
@@ -498,11 +512,22 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
-        engine.verify_draft_tree(prompt_ids=prompt_ids, draft_tree=tree, session_id="sess-A")
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        engine.verify_draft_tree(
+            prompt_ids=prompt_ids, 
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
+            session_id="sess-A"
+        )
+        flat_token_ids2, topology_map2, flat_log_probs2, flat_draft_probs_full2 = self._make_tree([20])
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=self._make_tree([20]),
+            flat_token_ids=flat_token_ids2,
+            topology_map=topology_map2,
+            flat_log_probs=flat_log_probs2,
+            flat_draft_probs_full=flat_draft_probs_full2,
             session_id="sess-A",
         )
         assert result.cache_hit is True
@@ -527,6 +552,8 @@ class TestVerifyWithMockedModel:
             bonus_token=99,
             num_accepted=2,
             accepted_leaf_index=1,
+            diverged=True,
+            accepted_indices=[0, 1],
         )
         mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
         mock_tokenizer_cls.return_value = _make_mock_tokenizer()
@@ -535,10 +562,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
         engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=tree,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id=None,
             temperature=0.0,
         )
@@ -566,6 +596,8 @@ class TestVerifyWithMockedModel:
             bonus_token=99,
             num_accepted=2,
             accepted_leaf_index=1,
+            diverged=True,
+            accepted_indices=[0, 1],
         )
         mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
         mock_tokenizer_cls.return_value = _make_mock_tokenizer()
@@ -574,10 +606,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
-            draft_tree=tree,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
             session_id=None,
             temperature=0.5,
         )
@@ -587,3 +622,60 @@ class TestVerifyWithMockedModel:
         assert result.num_accepted == 2
         assert result.accepted_token_ids == draft_ids
         assert result.correction_token_id == 99
+
+    @patch("specsplit.workers.target.engine.verify_greedy_tree")
+    @patch("specsplit.workers.target.engine.verify_stochastic_tree")
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_bonus_token_not_duplicate(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_verify_stochastic: MagicMock,
+        mock_verify_greedy: MagicMock,
+    ) -> None:
+        """When temperature > 0 and the tree fully accepts, the bonus token shouldn't duplicate."""
+        draft_ids = [10, 20]
+        prompt_ids = [1, 2]
+        accept_tokens = [0, 10, 20, 0]
+
+        # Simulate a FULLY ACCEPTED path (diverged=False)
+        mock_verify_stochastic.return_value = MagicMock(
+            accepted_tokens=draft_ids,
+            bonus_token=draft_ids[-1], # The bug was that it returned the last accepted token 
+            num_accepted=2,
+            accepted_leaf_index=1,
+            diverged=False,
+            accepted_indices=[0, 1],
+        )
+        mock_model_cls.return_value = _make_mock_target_model(accept_tokens=accept_tokens)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = TargetWorkerConfig(model_name="gpt2", device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        tree = self._make_tree(draft_ids)
+
+        # Before PR-2 fix, verify_draft_tree would see diverged=False 
+        # but would NOT clear the bonus token if it matched the last accepted token,
+        # leading to duplicate tokens outputted. 
+
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+
+        result = engine.verify_draft_tree(
+            prompt_ids=prompt_ids,
+            flat_token_ids=flat_token_ids,
+            topology_map=topology_map,
+            flat_log_probs=flat_log_probs,
+            flat_draft_probs_full=flat_draft_probs_full,
+            session_id=None,
+            temperature=0.5,
+        )
+
+        mock_verify_stochastic.assert_called_once()
+        # Ensure that TargetEngine deduplicated the bonus token because diverged=False 
+        # Since accept_tokens for the next state (base + leaf = 2 + 1 = 3) is index 3 -> 0
+        assert result.num_accepted == 2
+        assert result.accepted_token_ids == draft_ids
+        assert result.correction_token_id == 0
