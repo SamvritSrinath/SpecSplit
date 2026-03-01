@@ -186,7 +186,7 @@ class OrchestratorConfig(BaseSettings):
     simulated_rtt_ms: float = Field(default=0.0, description="Injected network latency per RPC")
 
     use_target_kv_cache: bool = Field(
-        default=False,
+        default=True,
         description="If False (naive mode), target verifies statelessly each round — no session KV cache, no flush. Use for testing that orchestrator/draft/target communication works.",
     )
     verify_temperature: float = Field(
