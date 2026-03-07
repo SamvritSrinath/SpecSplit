@@ -43,10 +43,10 @@ class TestTelemetryLogger:
         """Spans should be recorded with correct metadata."""
         tlog = TelemetryLogger(service_name="test-service")
 
-        with tlog.span("test_op", key="value") as span_id:
+        with tlog.span("test_op", key="value") as ctx:
             time.sleep(0.005)
-            assert isinstance(span_id, str)
-            assert len(span_id) == 16  # hex UUID prefix
+            assert isinstance(ctx.span_id, str)
+            assert len(ctx.span_id) == 16  # hex UUID prefix
 
         assert len(tlog.spans) == 1
         span = tlog.spans[0]
