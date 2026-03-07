@@ -127,7 +127,7 @@ def build_tree_attention(
         for i in range(num_tree_nodes):
             if prefix_length > 0:
                 mask[i, :prefix_length] = True
-            
+
             parent = topology_map[i]
             if parent != -1:
                 depths[i] = depths[parent] + 1
@@ -136,7 +136,10 @@ def build_tree_attention(
                 # Include the parent itself
                 mask[i, prefix_length + parent] = True
             else:
-                depths[i] = 1
+                depths[i] = 0
+
+            # Decoder states at tree position i must include token i itself.
+            mask[i, prefix_length + i] = True
 
         num_rows = num_tree_nodes
         position_ids_len = num_tree_nodes
@@ -161,7 +164,10 @@ def build_tree_attention(
                 # Include the parent itself
                 mask[row, parent_row] = True
             else:
-                depths[i] = 1
+                depths[i] = 0
+
+            # Decoder states at tree position i must include token i itself.
+            mask[row, row] = True
         num_rows = total_len
         position_ids_len = total_len
 

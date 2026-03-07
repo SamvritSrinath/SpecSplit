@@ -22,7 +22,7 @@ from __future__ import annotations
 import logging
 import threading
 import time
-from collections import OrderedDict, deque
+from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
@@ -36,7 +36,7 @@ from specsplit.core.verification import (
     verify_greedy_tree,
     verify_stochastic_tree,
 )
-from specsplit.workers.target.kv_cache import StaticKVCache, VirtualKVCache
+from specsplit.workers.target.kv_cache import VirtualKVCache
 from specsplit.workers.target.tree_attn import (
     bool_mask_to_float,
     build_tree_attention,
@@ -207,15 +207,12 @@ class TargetEngine:
         # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
         # dense tensors and never use HF batch padding.
 
-        self._model = (
-            AutoModelForCausalLM.from_pretrained(
-                self.config.model_name,
-                torch_dtype=torch.float16,
-                attn_implementation=self.config.attn_implementation,
-            )
-            .to(self.device)
-            .eval()
-        )
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            device_map={"": 0},
+            attn_implementation=self.config.attn_implementation,
+            low_cpu_mem_usage=True,
+        ).eval()
 
         self._is_loaded = True
         # attn_implementation from config (default "sdpa") ensures 4D causal
@@ -260,6 +257,42 @@ class TargetEngine:
             dtype=torch.float16,
             device=self.device,
         )
+
+    def _advance_cache_with_tokens(
+        self,
+        cache_state: KVCacheState,
+        token_ids: list[int],
+    ) -> torch.Tensor | None:
+        """Append linear delta tokens to an existing session cache.
+
+        Returns the logit predicting the token that follows the appended
+        delta sequence. When ``token_ids`` is empty, returns the cached
+        next-root logit unchanged.
+        """
+        if not token_ids:
+            return cache_state.next_root_logit
+        if cache_state.cache is None:
+            raise RuntimeError("Cannot advance a session cache before it is initialized.")
+
+        start_pos = cache_state.cache.seq_len
+        input_ids = torch.tensor([token_ids], dtype=torch.long, device=self.device)
+        position_ids = torch.arange(
+            start_pos,
+            start_pos + len(token_ids),
+            dtype=torch.long,
+            device=self.device,
+        ).unsqueeze(0)
+
+        with torch.no_grad():
+            outputs = self._model(
+                input_ids=input_ids,
+                position_ids=position_ids,
+                past_key_values=cache_state.cache,
+                use_cache=True,
+            )
+
+        cache_state.seq_len = cache_state.cache.seq_len
+        return outputs.logits[0, -1, :].detach().clone()
 
     # --------------------------------------------------------------------- #
     # Session management
@@ -479,6 +512,7 @@ class TargetEngine:
         session_id: str | None = None,
         temperature: float = 0.0,
         expected_prefix_length: int = 0,
+        new_token_ids: list[int] | None = None,
     ) -> VerificationResult:
         """Verify a draft token tree against the target model's distribution.
 
@@ -488,19 +522,25 @@ class TargetEngine:
 
         The verification pipeline:
             1. Build a tree-attention mask via ``build_tree_attention()``.
-            2. Forward pass the tree tokens through the target model
-               with cached KV state (prefix is not recomputed on cache hit).
-            3. Run ``verify_greedy_tree()`` on the tree logits.
-            4. Roll back the KV cache to the accepted prefix.
+            2. On cache hits, append any linear ``new_token_ids`` delta to the
+               session cache so the target prefix matches the draft context.
+            3. Forward pass the tree tokens through the target model with the
+               current cached KV state.
+            4. Run ``verify_greedy_tree()`` on the tree logits.
+            5. Roll back the KV cache to the accepted prefix.
 
         Args:
-            prompt_ids: Original prompt token IDs.
+            prompt_ids: Full prompt/prefix token IDs when rebuilding from
+                scratch after a miss or cache desync.
             flat_token_ids: Flattened list of draft token IDs.
             topology_map: Parent indices for each node in flat_token_ids.
             flat_log_probs: Log probabilities for the draft tokens.
             flat_draft_probs_full: Full draft probabilities if top-k is used.
             session_id: Optional session ID for KV cache reuse.  If ``None``,
                 verification is fully stateless (no caching).
+            new_token_ids: Linear delta tokens to append to the cached prefix
+                before tree verification. Used by the orchestrator to carry
+                forward the previous round's bonus/correction token.
 
         Returns:
             A ``VerificationResult`` with accepted tokens, an optional
@@ -521,23 +561,12 @@ class TargetEngine:
             session_lock = self._session_locks[session_id]
             session_lock.acquire()
         try:
-            # --- Handle empty tree (no draft tokens) ---
-            if not flat_token_ids:
-                sw.stop()
-                return VerificationResult(
-                    accepted_token_ids=[],
-                    correction_token_id=None,
-                    num_accepted=0,
-                    num_draft_tokens=0,
-                    cache_hit=cache_hit,
-                )
-
-            num_tree_nodes = len(flat_token_ids)
-
             # --- Step 2: Determine what to feed the model ---
             # Extract cached KV from StaticKVCache if available
             past_kv = None
+            delta_token_ids = new_token_ids or []
             prefix_length = cache_state.seq_len if cache_state and cache_hit else 0
+            prefix_next_logit: torch.Tensor | None = None
 
             # Context desync guard: if orchestrator reports expected_prefix_length
             # and our cache length disagrees, force rebuild to avoid gibberish logits.
@@ -547,7 +576,7 @@ class TargetEngine:
                 and cache_state is not None
                 and cache_state.seq_len != expected_prefix_length
             ):
-                if len(prompt_ids) < expected_prefix_length:
+                if delta_token_ids and not prompt_ids:
                     raise CacheDesyncError(
                         f"CACHE_EVICTED_DELTA_ONLY: target seq_len={cache_state.seq_len} != "
                         f"expected_prefix_length={expected_prefix_length}. "
@@ -563,20 +592,54 @@ class TargetEngine:
                 cache_hit = False
                 prefix_length = 0
                 past_kv = None
+                prefix_next_logit = None
                 if cache_state.cache is not None:
                     cache_state.cache.reset()
                     cache_state.seq_len = 0
 
             if cache_hit and prefix_length > 0 and cache_state and cache_state.cache is not None:
-                # Cache hit: pass StaticKVCache directly so model calls cache.update()
-                # in-place (no legacy_to_dynamic, no torch.cat reallocation).
-                past_kv = cache_state.cache
-                input_token_ids = flat_token_ids
+                if prompt_ids and not delta_token_ids and expected_prefix_length == 0:
+                    logger.warning(
+                        "Full prompt provided for active session %s; rebuilding cached prefix.",
+                        session_id,
+                    )
+                    cache_state.cache.reset()
+                    cache_state.seq_len = 0
+                    cache_state.next_root_logit = None
+                    cache_hit = False
+                    prefix_length = len(prompt_ids)
+                else:
+                    # Cache hit: append delta prompt tokens first so the tree is verified
+                    # against the exact same prefix the draft worker used.
+                    prefix_next_logit = self._advance_cache_with_tokens(cache_state, delta_token_ids)
+                    prefix_length = cache_state.seq_len
+                    past_kv = cache_state.cache
             else:
                 # No cache (or first call): feed prompt + draft tokens
-                input_token_ids = prompt_ids + flat_token_ids
                 prefix_length = len(prompt_ids)
                 past_kv = None  # Don't use stale cache
+
+            if past_kv is not None and prefix_length > 0 and prefix_next_logit is None:
+                raise CacheDesyncError(
+                    "CACHE_EVICTED_DELTA_ONLY: target session is missing next_root_logit. "
+                    "Orchestrator must retry with full prompt_token_ids."
+                )
+
+            # --- Handle empty tree (no draft tokens) ---
+            if not flat_token_ids:
+                if cache_state is not None:
+                    cache_state.next_root_logit = prefix_next_logit
+                sw.stop()
+                return VerificationResult(
+                    accepted_token_ids=[],
+                    correction_token_id=None,
+                    num_accepted=0,
+                    num_draft_tokens=0,
+                    cache_hit=cache_hit,
+                )
+
+            num_tree_nodes = len(flat_token_ids)
+            input_token_ids = flat_token_ids if past_kv is not None else prompt_ids + flat_token_ids
 
             input_ids = torch.tensor([input_token_ids], dtype=torch.long, device=self.device)
             # Shape: [1, input_len]
@@ -640,10 +703,8 @@ class TargetEngine:
             for i in range(num_tree_nodes):
                 if topology_map[i] == -1:
                     # Root node: logits that predict the first tree token.
-                    # Fix A2: ALL roots (not just i==0) must get the prompt's
-                    # last-position logit, not index into all_logits[0, -1, :].
-                    if cache_hit and prefix_length > 0 and cache_state.next_root_logit is not None:
-                        tree_logits[i] = cache_state.next_root_logit
+                    if prefix_length > 0 and prefix_next_logit is not None:
+                        tree_logits[i] = prefix_next_logit
                     elif prefix_length > 0:
                         tree_logits[i] = all_logits[0, prefix_length - 1, :]
                     else:
@@ -716,19 +777,15 @@ class TargetEngine:
                 if num_accepted > 0:
                     cache_state.next_root_logit = all_logits[0, base + leaf_idx, :].detach().clone()
                 else:
-                    # Fix Bug 2: Total rejection (num_accepted==0, correction is None).
-                    # On cache hit, all_logits has only tree rows [0..num_tree_nodes-1];
-                    # row 0 predicts what follows the first tree token (root). Use it
-                    # so the next round has valid next_root_logit (avoiding OOB when
-                    # next_root_logit was None and elif prefix_length>0 used wrong index).
-                    if cache_hit:
-                        cache_state.next_root_logit = all_logits[0, 0, :].detach().clone()
-                    elif prefix_length > 0:
-                        cache_state.next_root_logit = all_logits[
-                            0, prefix_length - 1, :
-                        ].detach().clone()
-                    else:
-                        cache_state.next_root_logit = None
+                    cache_state.next_root_logit = (
+                        prefix_next_logit.detach().clone()
+                        if prefix_next_logit is not None
+                        else (
+                            all_logits[0, prefix_length - 1, :].detach().clone()
+                            if prefix_length > 0
+                            else None
+                        )
+                    )
 
             sw.stop()
             return VerificationResult(

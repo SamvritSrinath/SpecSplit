@@ -67,6 +67,7 @@ def fake_kv_cache() -> tuple[tuple[torch.Tensor, torch.Tensor], ...]:
 def _make_mock_target_model(
     vocab_size: int = 100,
     accept_tokens: list[int] | None = None,
+    call_log: list[dict[str, object]] | None = None,
 ) -> MagicMock:
     """Create a mock target model whose forward returns controlled logits.
 
@@ -99,6 +100,26 @@ def _make_mock_target_model(
         use_cache=True,
         **kwargs,
     ):
+        if call_log is not None:
+            cache_len = 0
+            if past_key_values is not None:
+                if isinstance(past_key_values, tuple):
+                    cache_len = past_key_values[0][0].shape[2]
+                elif hasattr(past_key_values, "get_seq_length"):
+                    cache_len = past_key_values.get_seq_length()
+                elif hasattr(past_key_values, "seq_len"):
+                    cache_len = past_key_values.seq_len
+            call_log.append(
+                {
+                    "input_ids": input_ids.detach().cpu().tolist(),
+                    "position_ids": None
+                    if position_ids is None
+                    else position_ids.detach().cpu().tolist(),
+                    "cache_len_before": cache_len,
+                    "used_cache": past_key_values is not None,
+                }
+            )
+
         batch, seq_len = input_ids.shape
 
         logits = torch.zeros(batch, seq_len, vocab_size)
@@ -499,10 +520,10 @@ class TestVerifyWithMockedModel:
         mock_model_cls: MagicMock,
         mock_tokenizer_cls: MagicMock,
     ) -> None:
-        """Second call with same session_id should be a cache hit."""
+        """Second call with same session_id and delta tokens should be a cache hit."""
         draft_ids = [10]
         prompt_ids = [1]
-        accept_tokens = list(prompt_ids) + draft_ids
+        accept_tokens = [10, 0]
         mock_model_cls.return_value = _make_mock_target_model(
             accept_tokens=accept_tokens,
         )
@@ -523,14 +544,80 @@ class TestVerifyWithMockedModel:
         )
         flat_token_ids2, topology_map2, flat_log_probs2, flat_draft_probs_full2 = self._make_tree([20])
         result = engine.verify_draft_tree(
-            prompt_ids=prompt_ids,
+            prompt_ids=[],
             flat_token_ids=flat_token_ids2,
             topology_map=topology_map2,
             flat_log_probs=flat_log_probs2,
             flat_draft_probs_full=flat_draft_probs_full2,
             session_id="sess-A",
+            new_token_ids=[0],
+            expected_prefix_length=2,
         )
         assert result.cache_hit is True
+
+    @patch("specsplit.workers.target.engine.verify_greedy_tree")
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_cache_hit_applies_delta_tokens_before_tree_verification(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        mock_verify_greedy: MagicMock,
+    ) -> None:
+        """Cache hits must append delta tokens before verifying the next tree."""
+        call_log: list[dict[str, object]] = []
+        mock_model_cls.return_value = _make_mock_target_model(call_log=call_log)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+        mock_verify_greedy.side_effect = [
+            MagicMock(
+                accepted_tokens=[10],
+                bonus_token=99,
+                num_accepted=1,
+                accepted_leaf_index=0,
+                diverged=True,
+                accepted_indices=[0],
+            ),
+            MagicMock(
+                accepted_tokens=[20],
+                bonus_token=30,
+                num_accepted=1,
+                accepted_leaf_index=0,
+                diverged=True,
+                accepted_indices=[0],
+            ),
+        ]
+
+        config = TargetWorkerConfig(model_name="gpt2", device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        first_tree = self._make_tree([10])
+        engine.verify_draft_tree(
+            prompt_ids=[1],
+            flat_token_ids=first_tree[0],
+            topology_map=first_tree[1],
+            flat_log_probs=first_tree[2],
+            flat_draft_probs_full=first_tree[3],
+            session_id="sess-A",
+        )
+
+        call_log.clear()
+        second_tree = self._make_tree([20])
+        result = engine.verify_draft_tree(
+            prompt_ids=[],
+            new_token_ids=[99],
+            flat_token_ids=second_tree[0],
+            topology_map=second_tree[1],
+            flat_log_probs=second_tree[2],
+            flat_draft_probs_full=second_tree[3],
+            session_id="sess-A",
+            expected_prefix_length=2,
+        )
+
+        assert result.cache_hit is True
+        assert [entry["input_ids"] for entry in call_log] == [[[99]], [[20]]]
+        assert [entry["position_ids"] for entry in call_log] == [[[2]], [[3]]]
+        assert engine._session_caches["sess-A"].seq_len == 4
 
     @patch("specsplit.workers.target.engine.verify_greedy_tree")
     @patch("specsplit.workers.target.engine.verify_stochastic_tree")

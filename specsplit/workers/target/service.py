@@ -145,7 +145,6 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                             "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
                             "orchestrator must retry with full context",
                         )
-                prompt_ids = new_ids
 
             if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
                 context.abort(
@@ -186,6 +185,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
                     session_id=session_id,
                     temperature=request.temperature,
                     expected_prefix_length=expected_prefix_length,
+                    new_token_ids=new_ids,
                 )
             except CacheDesyncError as e:
                 sw.stop()
