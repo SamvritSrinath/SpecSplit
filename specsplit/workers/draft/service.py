@@ -43,8 +43,8 @@ def _to_proto_node(node: TokenNode) -> spec_decoding_pb2.TokenNode:
 
 
 def _count_nodes(node: TokenNode) -> int:
-    """Count all descendant nodes (excluding self) in a TokenNode tree."""
-    return sum(1 + _count_nodes(c) for c in node.children)
+    """Count all nodes in the subtree rooted at ``node`` (including self)."""
+    return 1 + sum(_count_nodes(c) for c in node.children)
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +122,7 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
                 span_id=request.request_id,
                 wall_time_ms=sw.elapsed_ms,
                 model_time_ms=sw.elapsed_ms,
-                tokens_processed=sum(1 + _count_nodes(r) for r in roots),
+                tokens_processed=sum(_count_nodes(r) for r in roots),
                 device=str(self._engine.device),
             )
 

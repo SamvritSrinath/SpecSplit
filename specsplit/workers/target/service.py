@@ -10,12 +10,12 @@ from __future__ import annotations
 import logging
 from collections import deque
 from concurrent import futures
-from typing import Any
 
 import grpc
 import torch
 
 from specsplit.core.config import TargetWorkerConfig
+import specsplit.core.telemetry as telemetry
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.target.engine import CacheDesyncError, TargetEngine
@@ -55,7 +55,7 @@ def _decode_proto_tree_direct(
 
         if node.top_k_token_ids and node.top_k_probs:
             has_top_k = True
-            for tid, p in zip(node.top_k_token_ids, node.top_k_probs):
+            for tid, p in zip(node.top_k_token_ids, node.top_k_probs, strict=False):
                 if 0 <= tid < vocab_size:
                     all_indices.append([current_idx, tid])
                     all_values.append(float(p))
@@ -138,13 +138,12 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # tokens as the full prompt would cause the 70B model to
             # verify against a nonsensical context, producing garbage.
             if not prompt_ids and new_ids:
-                with self._engine._session_dict_lock:
-                    if not session_id or session_id not in self._engine._session_caches:
-                        context.abort(
-                            grpc.StatusCode.FAILED_PRECONDITION,
-                            "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
-                            "orchestrator must retry with full context",
-                        )
+                if not session_id or not self._engine.has_session(session_id):
+                    context.abort(
+                        grpc.StatusCode.FAILED_PRECONDITION,
+                        "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
+                        "orchestrator must retry with full context",
+                    )
 
             if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
                 context.abort(
@@ -207,8 +206,8 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
 
             # Store P-1 specific telemetry in span context metadata automatically
             # Not added to protobuf to preserve schema, but injected into telemetry backend
-            import specsplit.core.telemetry as telemetry
-            ctx = telemetry.get_current_context()
+            get_ctx = getattr(telemetry, "get_current_context", None)
+            ctx = get_ctx() if callable(get_ctx) else None
             if ctx is not None:
                 ctx.metadata["proto_decode_ms"] = proto_decode_ms
                 ctx.metadata["payload_bytes"] = payload_bytes

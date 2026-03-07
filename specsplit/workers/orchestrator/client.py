@@ -382,13 +382,21 @@ class ConversationSession:
                 from specsplit.proto import spec_decoding_pb2
 
                 end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
-                end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
-                coro = self.orchestrator._target_stub.EndSession(end_req)
+                call = self.orchestrator._target_stub.EndSession(end_req)
+
+                async def _await_end_session() -> None:
+                    await call
+
                 try:
                     loop = asyncio.get_running_loop()
-                    loop.create_task(coro)
+                    _end_task = loop.create_task(_await_end_session())
                 except RuntimeError:
-                    asyncio.run(coro)
+                    loop = asyncio.new_event_loop()
+                    try:
+                        asyncio.set_event_loop(loop)
+                        loop.run_until_complete(_await_end_session())
+                    finally:
+                        loop.close()
                 logger.debug("ConversationSession %s ended.", self.session_id)
             except Exception:
                 logger.debug("ConversationSession %s cleanup failed (non-critical).", self.session_id)

@@ -921,6 +921,7 @@ async def run_speculative_loop_async(
             if not state.is_fallback_mode:
                 error = rolling_mean - state.pid.setpoint
                 state.pid.integral += error
+                state.pid.integral = max(-10.0, min(10.0, state.pid.integral))
                 derivative = error - state.pid.prev_error
                 
                 adjustment = (
@@ -1054,6 +1055,7 @@ async def run_speculative_loop_async(
                                 current_context,
                                 cfg,
                                 round_idx=round_idx + 1,
+                                draft_len=state.current_k,
                                 session_id=session_id,
                             )
                         except grpc.aio.AioRpcError as e:
