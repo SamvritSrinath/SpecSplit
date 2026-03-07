@@ -30,7 +30,7 @@ result extraction.
 from __future__ import annotations
 
 import logging
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 
 import torch
 
@@ -225,8 +225,7 @@ def verify_greedy_tree(
             if len(path) > len(best_path):
                 best_path = path
                 best_divergence_node = node_idx
-                if not children[node_idx]:
-                    best_diverged = True
+                best_diverged = True
             continue
 
         # Node is accepted — extend the path
@@ -234,7 +233,11 @@ def verify_greedy_tree(
 
         if not children[node_idx]:
             # Leaf node — this path is complete and fully accepted
-            if len(new_path) > len(best_path):
+            # Tie-breaker: prefer non-diverged accepted leaves over equally-long
+            # previously selected diverged paths.
+            if len(new_path) > len(best_path) or (
+                len(new_path) == len(best_path) and best_diverged
+            ):
                 best_path = new_path
                 # For a fully-accepted leaf, the bonus token comes from
                 # the target's prediction at this leaf position.  We use
@@ -348,20 +351,20 @@ def verify_stochastic_tree(
     # ------------------------------------------------------------------
     # Precompute random values to avoid CPU-GPU sync inside the loop
     # We only care about matching `draft_tokens` vs `target_probs` here.
-    
+
     # Fast path array prep
     rn = torch.rand(num_tree_nodes, device=target_probs.device).cpu().tolist()
     d_tokens = draft_tokens.cpu().tolist()
     d_probs = draft_probs.cpu().tolist()
     # Need target_probs for draft tokens to check acceptance
     t_probs_draft = target_probs[torch.arange(num_tree_nodes), draft_tokens].cpu().tolist()
-    
+
     accepted_list = [False] * num_tree_nodes
-    
+
     for i in range(num_tree_nodes):
         q_val = d_probs[i]
         p_val = t_probs_draft[i]
-        
+
         if q_val <= 0:
             accepted_list[i] = False
         elif p_val >= q_val:
@@ -389,12 +392,12 @@ def verify_stochastic_tree(
     best_path: list[int] = []
     best_divergence_node: int = -1
     best_diverged: bool = True
-    
+
     stack: list[tuple[int, list[int]]] = [(r, []) for r in roots]
-    
+
     while stack:
         node_idx, path = stack.pop()
-        
+
         if not accepted_list[node_idx]:
             # This node is REJECTED. The path up to (but not including)
             # this node is a candidate for the longest accepted path.
@@ -407,13 +410,17 @@ def verify_stochastic_tree(
                 # E.g. rejection at the very roots
                 best_divergence_node = node_idx
             continue
-            
+
         # Node is accepted — extend the path
         new_path = [*path, node_idx]
-        
+
         if not children[node_idx]:
             # Leaf node — this path is complete and fully accepted
-            if len(new_path) > len(best_path):
+            # Same tie-breaker as greedy mode: prefer non-diverged accepted leaves
+            # over equally-long diverged paths.
+            if len(new_path) > len(best_path) or (
+                len(new_path) == len(best_path) and best_diverged
+            ):
                 best_path = new_path
                 best_divergence_node = node_idx
                 best_diverged = False  # Fully accepted to leaf
@@ -421,13 +428,13 @@ def verify_stochastic_tree(
             # Internal node — continue DFS into children
             for child_idx in children[node_idx]:
                 stack.append((child_idx, new_path))
-                
+
     # ------------------------------------------------------------------
     # Step 4: Extract results and sample bonus token
     # ------------------------------------------------------------------
     accepted_tokens = [d_tokens[i] for i in best_path]
     current_node = best_path[-1] if best_path else -1
-    
+
     if best_divergence_node >= 0:
         p_dist = target_probs[best_divergence_node]
         if best_diverged:

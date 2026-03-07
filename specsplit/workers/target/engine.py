@@ -176,12 +176,8 @@ class TargetEngine:
 
         # D3: Session TTL garbage collection
         self._session_ttl_seconds = self.config.session_ttl_seconds
-        self._ttl_thread = threading.Thread(
-            target=self._ttl_gc_loop,
-            daemon=True,
-            name="target-engine-ttl-gc",
-        )
-        self._ttl_thread.start()
+        self._ttl_stop_event = threading.Event()
+        self._ttl_thread: threading.Thread | None = None
 
         logger.info(
             "TargetEngine initialized (model=%s, device=%s, max_sessions=%d, ttl=%.0fs)",
@@ -207,14 +203,30 @@ class TargetEngine:
         # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
         # dense tensors and never use HF batch padding.
 
+        model_kwargs: dict[str, Any] = {
+            "attn_implementation": self.config.attn_implementation,
+            "low_cpu_mem_usage": True,
+        }
+        device_str = str(self.device)
+        if device_str.startswith("cuda") and torch.cuda.is_available():
+            model_kwargs["device_map"] = {"": device_str}
+            model_kwargs["torch_dtype"] = torch.float16
+        elif device_str == "cpu":
+            model_kwargs["device_map"] = {"": "cpu"}
         self._model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
-            device_map={"": 0},
-            attn_implementation=self.config.attn_implementation,
-            low_cpu_mem_usage=True,
+            **model_kwargs,
         ).eval()
 
         self._is_loaded = True
+        if self._ttl_thread is None or not self._ttl_thread.is_alive():
+            self._ttl_stop_event.clear()
+            self._ttl_thread = threading.Thread(
+                target=self._ttl_gc_loop,
+                daemon=True,
+                name="target-engine-ttl-gc",
+            )
+            self._ttl_thread.start()
         # attn_implementation from config (default "sdpa") ensures 4D causal
         # tree masks are supported; FA2 would cause sibling context leakage.
         self._use_4d_mask = True
@@ -352,22 +364,29 @@ class TargetEngine:
         """
         with self._session_dict_lock:
             lock = self._session_locks.get(session_id)
-            if lock is not None:
-                lock.acquire()
-            try:
+
+        if lock is not None:
+            lock.acquire()
+        try:
+            with self._session_dict_lock:
                 cache = self._session_caches.pop(session_id, None)
                 self._session_locks.pop(session_id, None)
-                if cache is not None:
-                    # Explicitly delete tensors to free GPU memory
-                    cache.cache = None
-                    cache.next_root_logit = None
-                    logger.info("Session ended and cache released: %s", session_id)
-                    return True
-                logger.debug("Session not found (already ended?): %s", session_id)
-                return False
-            finally:
-                if lock is not None:
-                    lock.release()
+            if cache is not None:
+                # Explicitly delete tensors to free GPU memory
+                cache.cache = None
+                cache.next_root_logit = None
+                logger.info("Session ended and cache released: %s", session_id)
+                return True
+            logger.debug("Session not found (already ended?): %s", session_id)
+            return False
+        finally:
+            if lock is not None:
+                lock.release()
+
+    def has_session(self, session_id: str) -> bool:
+        """Return True if a session cache currently exists."""
+        with self._session_dict_lock:
+            return session_id in self._session_caches
 
     @property
     def active_sessions(self) -> int:
@@ -376,10 +395,10 @@ class TargetEngine:
 
     def _ttl_gc_loop(self) -> None:
         """Background loop that purges stale sessions every 60 seconds."""
-        while True:
-            time.sleep(60)
+        while not self._ttl_stop_event.wait(60):
             try:
-                self.purge_stale_sessions()
+                if self._is_loaded:
+                    self.purge_stale_sessions()
             except Exception:
                 logger.exception("Error during TTL session purge")
 
@@ -400,24 +419,41 @@ class TargetEngine:
                 sid for sid, cache in list(self._session_caches.items())
                 if (now - cache.last_accessed) > ttl
             ]
-            for sid in stale_ids:
+        for sid in stale_ids:
+            with self._session_dict_lock:
                 lock = self._session_locks.get(sid)
-                if lock is not None and not lock.acquire(blocking=False):
+            acquired = False
+            if lock is not None:
+                acquired = lock.acquire(blocking=False)
+                if not acquired:
                     # Session is actively in verify_draft_tree; skip this cycle.
                     continue
-                try:
+            try:
+                with self._session_dict_lock:
                     cache = self._session_caches.pop(sid, None)
                     self._session_locks.pop(sid, None)
-                    if cache is not None:
-                        cache.cache = None
-                        cache.next_root_logit = None
+                if cache is not None:
+                    cache.cache = None
+                    cache.next_root_logit = None
                     purged_ids.append(sid)
-                finally:
-                    if lock is not None:
-                        lock.release()
+            finally:
+                if lock is not None and acquired:
+                    lock.release()
         if purged_ids:
             logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(purged_ids), ttl, purged_ids)
         return len(purged_ids)
+
+    def shutdown(self) -> None:
+        """Stop the background TTL GC thread."""
+        self._ttl_stop_event.set()
+        if self._ttl_thread is not None and self._ttl_thread.is_alive():
+            self._ttl_thread.join(timeout=1.0)
+
+    def __del__(self) -> None:
+        try:
+            self.shutdown()
+        except Exception:
+            pass
 
     # --------------------------------------------------------------------- #
     # KV Cache rollback
@@ -620,9 +656,10 @@ class TargetEngine:
                 past_kv = None  # Don't use stale cache
 
             if past_kv is not None and prefix_length > 0 and prefix_next_logit is None:
-                raise CacheDesyncError(
-                    "CACHE_EVICTED_DELTA_ONLY: target session is missing next_root_logit. "
-                    "Orchestrator must retry with full prompt_token_ids."
+                logger.debug(
+                    "Session %s: past_kv present but prefix_next_logit is None; "
+                    "will compute from model outputs.",
+                    session_id,
                 )
 
             # --- Handle empty tree (no draft tokens) ---

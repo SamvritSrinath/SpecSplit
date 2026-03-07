@@ -101,8 +101,14 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
         device: torch.device | str = "cpu",
     ) -> None:
         if HFCache is not None:
-            super().__init__(layers=[])  # Bypass HF layers; we override update()
-        elif not hasattr(self, "layers"):  # Fallback when transformers absent
+            # Cache.__init__ signature differs across transformers versions.
+            # Prefer layers=[] for versions that require one init argument;
+            # fallback to no-arg init for versions that reject `layers`.
+            try:
+                super().__init__(layers=[])  # type: ignore[misc,call-arg]
+            except TypeError:
+                super().__init__()  # type: ignore[misc]
+        if not hasattr(self, "layers"):  # Fallback when transformers absent
             self.layers = []
         self.num_layers = num_layers
         self.num_heads = num_heads

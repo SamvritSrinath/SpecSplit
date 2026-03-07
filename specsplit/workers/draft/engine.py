@@ -249,11 +249,9 @@ class DraftEngine:
             # Case B: Extension or rollback — crop to match_len-1, process tail.
             # One-token forward generates last_logits while reusing prefix cache.
             reuse_len = match_len - 1
-            if reuse_len == 0:
-                # No prefix to reuse; fall through to full recompute.
-                past_kv = None
-                new_ids = prompt_ids
-            else:
+            past_kv = None
+            new_ids = prompt_ids
+            if reuse_len > 0:
                 past_kv = cache_state.kv_cache
 
                 if cache_state.cached_prompt_len > reuse_len:
@@ -267,23 +265,13 @@ class DraftEngine:
 
                 new_ids = prompt_ids[reuse_len:]
 
-            if past_kv is None:
-                # reuse_len was 0; full recompute.
-                new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
-                with torch.no_grad():
-                    prefix_out = self._model(
-                        input_ids=new_input,
-                        past_key_values=None,
-                        use_cache=True,
-                    )
-            else:
-                new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
-                with torch.no_grad():
-                    prefix_out = self._model(
-                        input_ids=new_input,
-                        past_key_values=past_kv,
-                        use_cache=True,
-                    )
+            new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                prefix_out = self._model(
+                    input_ids=new_input,
+                    past_key_values=past_kv,
+                    use_cache=True,
+                )
             past_kv = prefix_out.past_key_values
             last_logits = prefix_out.logits[:, -1, :]
         else:

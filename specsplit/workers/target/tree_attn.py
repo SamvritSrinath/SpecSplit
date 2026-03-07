@@ -113,6 +113,8 @@ def build_tree_attention(
     # PR-9: Fast O(N) Tree Attention Ancestor Computation
     # Assert that the topology map is topologically sorted (BFS order).
     # Since nodes refer to parents, the parent must be computed before the child.
+    # This ordering is required for the ancestor-inheritance slices below:
+    # mask[i, prefix_length:prefix_length+i] and mask[row, prefix_length:row].
     if num_tree_nodes > 0:
         assert all(topology_map[i] < i for i in range(num_tree_nodes) if topology_map[i] != -1), \
             "topology_map is not topologically sorted"
