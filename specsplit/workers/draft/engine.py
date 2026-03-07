@@ -251,10 +251,7 @@ class DraftEngine:
             reuse_len = match_len - 1
             past_kv = None
             new_ids = prompt_ids
-            if reuse_len == 0:
-                # No prefix to reuse; fall through to full recompute.
-                pass
-            else:
+            if reuse_len > 0:
                 past_kv = cache_state.kv_cache
 
                 if cache_state.cached_prompt_len > reuse_len:

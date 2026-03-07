@@ -43,7 +43,7 @@ def _to_proto_node(node: TokenNode) -> spec_decoding_pb2.TokenNode:
 
 
 def _count_nodes(node: TokenNode) -> int:
-    """Count all nodes in the subtree rooted at ``node`` (including self)."""
+    """Count all nodes in the subtree rooted at `node` (including self)."""
     return 1 + sum(_count_nodes(c) for c in node.children)
 
 

@@ -378,28 +378,31 @@ class ConversationSession:
         self._is_active = False
 
         if self.orchestrator._target_stub is not None:
+            cleanup_log_msg = "ConversationSession %s cleanup failed (non-critical)."
             try:
                 from specsplit.proto import spec_decoding_pb2
 
                 end_req = spec_decoding_pb2.EndSessionRequest(session_id=self.session_id)
                 call = self.orchestrator._target_stub.EndSession(end_req)
 
-                async def _await_end_session() -> None:
+                async def _run_end_session() -> None:
                     await call
+
+                def _log_end_session_error(task: asyncio.Task[None]) -> None:
+                    try:
+                        task.result()
+                    except Exception as exc:
+                        logger.debug(cleanup_log_msg + " (%s)", self.session_id, exc)
 
                 try:
                     loop = asyncio.get_running_loop()
-                    _end_task = loop.create_task(_await_end_session())
+                    _end_task = loop.create_task(_run_end_session())
+                    _end_task.add_done_callback(_log_end_session_error)
                 except RuntimeError:
-                    loop = asyncio.new_event_loop()
-                    try:
-                        asyncio.set_event_loop(loop)
-                        loop.run_until_complete(_await_end_session())
-                    finally:
-                        loop.close()
+                    asyncio.run(_run_end_session())
                 logger.debug("ConversationSession %s ended.", self.session_id)
             except Exception:
-                logger.debug("ConversationSession %s cleanup failed (non-critical).", self.session_id)
+                logger.debug(cleanup_log_msg, self.session_id)
 
 
 def main() -> None:

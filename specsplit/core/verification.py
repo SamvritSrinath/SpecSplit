@@ -233,6 +233,8 @@ def verify_greedy_tree(
 
         if not children[node_idx]:
             # Leaf node — this path is complete and fully accepted
+            # Tie-breaker: prefer non-diverged accepted leaves over equally-long
+            # previously selected diverged paths.
             if len(new_path) > len(best_path) or (
                 len(new_path) == len(best_path) and best_diverged
             ):
@@ -414,6 +416,8 @@ def verify_stochastic_tree(
 
         if not children[node_idx]:
             # Leaf node — this path is complete and fully accepted
+            # Same tie-breaker as greedy mode: prefer non-diverged accepted leaves
+            # over equally-long diverged paths.
             if len(new_path) > len(best_path) or (
                 len(new_path) == len(best_path) and best_diverged
             ):
