@@ -195,7 +195,7 @@ class OrchestratorConfig(BaseSettings):
         description="Sampling temperature for verification. 0.0 = greedy, >0.0 = stochastic rejection sampling.",
     )
     draft_temperature: float = Field(
-        default=0.0,
+        default=0.25,
         ge=0.0,
         description="Sampling temperature for draft generation. 0.0 = greedy (aligns with verify). Passed to draft worker.",
     )
@@ -211,7 +211,7 @@ class OrchestratorConfig(BaseSettings):
     model_config = {"env_prefix": "SPECSPLIT_ORCH_"}
 
     @model_validator(mode="after")
-    def _warn_on_temperature_mismatch(self) -> "OrchestratorConfig":
+    def _warn_on_temperature_mismatch(self) -> OrchestratorConfig:
         if abs(self.verify_temperature - self.draft_temperature) > 0.01:
             logger.warning(
                 "Temperature mismatch: verify_temperature=%.2f but draft_temperature=%.2f. "

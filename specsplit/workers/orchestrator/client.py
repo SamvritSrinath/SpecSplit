@@ -547,6 +547,12 @@ def main() -> None:
         help="Draft sampling temperature. 0 = greedy (align with target). Overrides config.",
     )
     parser.add_argument(
+        "--verify-temperature",
+        type=float,
+        default=None,
+        help="Verification temperature. Defaults to draft temperature unless explicitly set.",
+    )
+    parser.add_argument(
         "--model-name",
         type=str,
         default=None,
@@ -561,7 +567,7 @@ def main() -> None:
     parser.add_argument(
         "--use-target-cache",
         action="store_true",
-        help="Enable target KV cache (dynamic caching). Default is naive/stateless per round for testing.",
+        help="Enable target KV cache (dynamic caching).",
     )
     parser.add_argument(
         "--max-output-tokens",
@@ -600,6 +606,40 @@ def main() -> None:
         config_kw["max_draft_tokens"] = args.max_draft_tokens
     if args.draft_temperature is not None:
         config_kw["draft_temperature"] = args.draft_temperature
+    if args.verify_temperature is not None:
+        config_kw["verify_temperature"] = args.verify_temperature
+
+    # Temperature lockstep (CLI ergonomics):
+    # If verify temperature is not explicitly configured, align it to draft temperature
+    # to avoid accidental low-acceptance mixed mode (e.g., verify=0.0, draft=1.0).
+    verify_explicit = (
+        args.verify_temperature is not None
+        or "SPECSPLIT_ORCH_VERIFY_TEMPERATURE" in os.environ
+        or "verify_temperature" in file_cfg
+    )
+    if not verify_explicit and "verify_temperature" not in config_kw:
+        draft_temp_for_lockstep: float | None = None
+        if args.draft_temperature is not None:
+            draft_temp_for_lockstep = args.draft_temperature
+        elif "SPECSPLIT_ORCH_DRAFT_TEMPERATURE" in os.environ:
+            try:
+                draft_temp_for_lockstep = float(
+                    os.environ["SPECSPLIT_ORCH_DRAFT_TEMPERATURE"]
+                )
+            except ValueError:
+                draft_temp_for_lockstep = None
+        elif "draft_temperature" in file_cfg:
+            try:
+                draft_temp_for_lockstep = float(file_cfg["draft_temperature"])
+            except (TypeError, ValueError):
+                draft_temp_for_lockstep = None
+
+        if draft_temp_for_lockstep is not None:
+            config_kw["verify_temperature"] = draft_temp_for_lockstep
+            logger.info(
+                "Verify temperature not explicitly set. Locking verify_temperature=%.2f to draft_temperature.",
+                draft_temp_for_lockstep,
+            )
     config = OrchestratorConfig(**config_kw)
 
     # Model name priority: --model-name > config file > OrchestratorConfig.tokenizer_model
