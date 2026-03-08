@@ -13,6 +13,8 @@ help: ## Show this help message
 install: ## Install package in editable mode with dev dependencies
 	pip install -e ".[dev]"
 
+UNAME_S := $(shell uname -s)
+
 proto: ## Generate Python stubs from protobuf definitions
 	python -m grpc_tools.protoc \
 		--proto_path=$(PROTO_DIR) \
@@ -20,8 +22,13 @@ proto: ## Generate Python stubs from protobuf definitions
 		--grpc_python_out=$(PROTO_DIR) \
 		--mypy_out=$(PROTO_DIR) \
 		$(PROTO_SRC)
+ifeq ($(UNAME_S),Darwin)
 	sed -i '' 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
 		$(PROTO_DIR)/spec_decoding_pb2_grpc.py
+else
+	sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
+		$(PROTO_DIR)/spec_decoding_pb2_grpc.py
+endif
 	@echo "✓ Proto stubs generated in $(PROTO_DIR)/"
 
 test: ## Run unit tests (excludes integration)
