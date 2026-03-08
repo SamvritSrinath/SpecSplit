@@ -29,8 +29,16 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
-from specsplit.core.cache_utils import legacy_to_dynamic_cache
+from specsplit.core.cache_utils import (
+    cache_to_legacy,
+    legacy_to_dynamic_cache,
+)
 from specsplit.core.config import TargetWorkerConfig
+from specsplit.core.model_loading import (
+    get_checkpoint_dtype,
+    get_model_config,
+    get_model_vocab_size,
+)
 from specsplit.core.telemetry import Stopwatch
 from specsplit.core.verification import (
     verify_greedy_tree,
@@ -115,23 +123,7 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
     transformers), and Cache API with .layers (e.g. DynamicCache in newer transformers
     that no longer provide to_legacy_cache).
     """
-    if past_key_values is None:
-        return None
-    # Already legacy: tuple of (key, value) per layer
-    if isinstance(past_key_values, tuple) and len(past_key_values) > 0:
-        first = past_key_values[0]
-        if isinstance(first, (tuple, list)) and len(first) == 2:
-            return past_key_values  # type: ignore[return-value]
-    if hasattr(past_key_values, "to_legacy_cache"):
-        return past_key_values.to_legacy_cache()
-    # New Cache API (e.g. DynamicCache): build legacy from .layers
-    if hasattr(past_key_values, "layers") and isinstance(past_key_values.layers, (list, tuple)):
-        return tuple(
-            (layer.keys, layer.values)
-            for layer in past_key_values.layers
-            if getattr(layer, "is_initialized", True) and getattr(layer, "keys", None) is not None
-        )
-    return None
+    return cache_to_legacy(past_key_values)
 
 
 
@@ -164,6 +156,7 @@ class TargetEngine:
         self._tokenizer: Any = None  # transformers.AutoTokenizer
         self._is_loaded = False
         self._use_4d_mask = True  # D2: set to False when FA2 is detected
+        self._model_dtype: torch.dtype = torch.float16
 
         # Session → KV cache mapping (LRU ordered).
         # Concurrency: each session_id has a single lock; concurrent requests
@@ -192,13 +185,7 @@ class TargetEngine:
     # --------------------------------------------------------------------- #
 
     def load_model(self) -> None:
-        """Load the target model and tokenizer via ``AutoModelForCausalLM``.
-
-        Uses the HuggingFace ``transformers`` modular auto-class API so that
-        any causal-LM architecture is supported out of the box.  The model
-        is loaded in ``float16`` precision and placed on the configured
-        device.
-        """
+        """Load the target model and tokenizer via ``AutoModelForCausalLM``."""
         self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
         # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
         # dense tensors and never use HF batch padding.
@@ -208,17 +195,28 @@ class TargetEngine:
             "low_cpu_mem_usage": True,
         }
         device_str = str(self.device)
+        model_dtype = get_checkpoint_dtype(
+            self.config.model_name,
+            default=torch.float16 if device_str.startswith("cuda") else None,
+        )
+        if model_dtype is not None:
+            model_kwargs["dtype"] = model_dtype
         if device_str.startswith("cuda") and torch.cuda.is_available():
             model_kwargs["device_map"] = {"": device_str}
-            model_kwargs["torch_dtype"] = torch.float16
-        elif device_str == "cpu":
-            model_kwargs["device_map"] = {"": "cpu"}
+
         self._model = AutoModelForCausalLM.from_pretrained(
             self.config.model_name,
             **model_kwargs,
-        ).eval()
+        )
+        if "device_map" not in model_kwargs:
+            self._model = self._model.to(self.device)
+        self._model = self._model.eval()
 
         self._is_loaded = True
+        self._model_dtype = model_kwargs.get(
+            "dtype",
+            getattr(self._model, "dtype", torch.float16),
+        )
         if self._ttl_thread is None or not self._ttl_thread.is_alive():
             self._ttl_stop_event.clear()
             self._ttl_thread = threading.Thread(
@@ -232,6 +230,17 @@ class TargetEngine:
         self._use_4d_mask = True
 
         logger.info("Target model loaded: %s on %s", self.config.model_name, self.device)
+
+    @property
+    def model_vocab_size(self) -> int:
+        """Vocabulary size exposed by the loaded model or tokenizer."""
+        if self._model is not None:
+            vocab_size = get_model_vocab_size(self._model)
+            if vocab_size > 0:
+                return vocab_size
+        if self._tokenizer is not None:
+            return len(self._tokenizer)
+        return 0
 
     # --------------------------------------------------------------------- #
     # StaticKVCache factory
@@ -253,7 +262,7 @@ class TargetEngine:
         if not self._is_loaded or self._model is None:
             raise RuntimeError("Cannot create VirtualKVCache before model is loaded.")
 
-        cfg = self._model.config
+        cfg = get_model_config(self._model)
         num_layers = cfg.num_hidden_layers
         # GQA models (Llama, Qwen2, Mistral) use num_key_value_heads
         num_heads = getattr(cfg, "num_key_value_heads", cfg.num_attention_heads)
@@ -266,7 +275,7 @@ class TargetEngine:
             max_seq_len=max_seq_len,
             head_dim=head_dim,
             batch_size=1,
-            dtype=torch.float16,
+            dtype=self._model_dtype,
             device=self.device,
         )
 
@@ -341,7 +350,7 @@ class TargetEngine:
                     "Evicted LRU session %s (max_sessions=%d)", evict_id, self.config.max_sessions
                 )
 
-            # Create a new session with a VirtualKVCache
+            # Create a new session with a VirtualKVCache.
             virtual_cache = self._create_virtual_cache() if self._is_loaded else None
             cache = KVCacheState(cache=virtual_cache, last_accessed=time.time())
             self._session_caches[session_id] = cache
@@ -387,6 +396,12 @@ class TargetEngine:
         """Return True if a session cache currently exists."""
         with self._session_dict_lock:
             return session_id in self._session_caches
+
+    def has_usable_session(self, session_id: str) -> bool:
+        """Return True if a session exists and currently stores a usable prefix."""
+        with self._session_dict_lock:
+            cache_state = self._session_caches.get(session_id)
+        return cache_state is not None and cache_state.seq_len > 0
 
     @property
     def active_sessions(self) -> int:
@@ -597,6 +612,9 @@ class TargetEngine:
             session_lock = self._session_locks[session_id]
             session_lock.acquire()
         try:
+            if cache_hit and cache_state is not None and cache_state.seq_len == 0:
+                cache_hit = False
+
             # --- Step 2: Determine what to feed the model ---
             # Extract cached KV from StaticKVCache if available
             past_kv = None
@@ -694,14 +712,14 @@ class TargetEngine:
             # When FA2 is active, skip the mask entirely (position_ids still
             # encode tree structure for positional encoding).
             if self._use_4d_mask:
-                attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model.dtype)
+                attn_mask_float = bool_mask_to_float(attn_mask_bool, dtype=self._model_dtype)
             else:
                 attn_mask_float = None
 
             # StaticKVCache is passed directly; model calls cache.update() in-place.
             # Only convert legacy tuples (e.g. from mocks) to DynamicCache.
             if past_kv is not None and isinstance(past_kv, tuple):
-                past_kv = legacy_to_dynamic_cache(past_kv, self._model.config)
+                past_kv = legacy_to_dynamic_cache(past_kv, get_model_config(self._model))
 
             # --- Step 4: Forward pass ---
             with torch.no_grad():

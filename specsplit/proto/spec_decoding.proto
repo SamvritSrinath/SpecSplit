@@ -140,4 +140,6 @@ message PingRequest  {}
 message PingResponse {
   string  status = 1;  // "ok" if healthy.
   string  worker_type = 2;  // "draft" or "target".
+  string  model_name = 3;  // Loaded model/tokenizer identifier or local path.
+  int32   vocab_size = 4;  // Loaded vocabulary size when available.
 }

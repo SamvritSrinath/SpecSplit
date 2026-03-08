@@ -138,7 +138,7 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # tokens as the full prompt would cause the 70B model to
             # verify against a nonsensical context, producing garbage.
             if not prompt_ids and new_ids:
-                if not session_id or not self._engine.has_session(session_id):
+                if not session_id or not self._engine.has_usable_session(session_id):
                     context.abort(
                         grpc.StatusCode.FAILED_PRECONDITION,
                         "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
@@ -154,7 +154,9 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             sw = Stopwatch()
             sw.start()
 
-            vocab_size = self._engine._model.config.vocab_size if self._engine._is_loaded else 32000
+            vocab_size = self._engine.model_vocab_size if self._engine._is_loaded else 32000
+            if vocab_size <= 0:
+                vocab_size = 32000
             device = self._engine.device
             dtype = self._engine._model.dtype if self._engine._is_loaded else torch.float16
 
@@ -277,7 +279,12 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
     ) -> spec_decoding_pb2.PingResponse:
         """Health check endpoint."""
         logger.debug("Ping received (active_sessions=%d)", self._engine.active_sessions)
-        return spec_decoding_pb2.PingResponse(status="ok", worker_type="target")
+        return spec_decoding_pb2.PingResponse(
+            status="ok",
+            worker_type="target",
+            model_name=self._engine.config.model_name,
+            vocab_size=self._engine.model_vocab_size,
+        )
 
 
 def serve(config: TargetWorkerConfig | None = None) -> None:

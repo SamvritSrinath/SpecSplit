@@ -26,7 +26,19 @@ from typing import Any
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
+from specsplit.core.cache_utils import (
+    batch_model_caches,
+    cache_supports_crop,
+    crop_cache,
+    legacy_to_dynamic_cache,
+    slice_batch_item_from_cache,
+)
 from specsplit.core.config import DraftWorkerConfig
+from specsplit.core.model_loading import (
+    get_checkpoint_dtype,
+    get_model_config,
+    get_model_vocab_size,
+)
 from specsplit.core.serialization import logits_to_probs
 from specsplit.core.telemetry import Stopwatch
 
@@ -113,27 +125,46 @@ class DraftEngine:
         )
 
     def load_model(self) -> None:
-        """Load the draft model and tokenizer via ``AutoModelForCausalLM``.
-
-        Uses ``torch.float16`` precision and places the model on the
-        configured device.
-        """
+        """Load the draft model and tokenizer via ``AutoModelForCausalLM``."""
         self._tokenizer = AutoTokenizer.from_pretrained(self.config.model_name)
         self._eos_token_id = self._tokenizer.eos_token_id
         # Issue 12: Do NOT mutate tokenizer.pad_token — we manage our own
         # dense tensors and never use HF batch padding.
 
-        self._model = (
-            AutoModelForCausalLM.from_pretrained(
-                self.config.model_name,
-                torch_dtype=torch.float16,
-            )
-            .to(self.device)
-            .eval()
+        model_kwargs: dict[str, Any] = {
+            "low_cpu_mem_usage": True,
+        }
+        device_str = str(self.device)
+        model_dtype = get_checkpoint_dtype(
+            self.config.model_name,
+            default=torch.float16 if device_str.startswith("cuda") else None,
         )
+        if model_dtype is not None:
+            model_kwargs["dtype"] = model_dtype
+        if device_str.startswith("cuda") and torch.cuda.is_available():
+            model_kwargs["device_map"] = {"": device_str}
+
+        self._model = AutoModelForCausalLM.from_pretrained(
+            self.config.model_name,
+            **model_kwargs,
+        )
+        if "device_map" not in model_kwargs:
+            self._model = self._model.to(self.device)
+        self._model = self._model.eval()
 
         self._is_loaded = True
         logger.info("Draft model loaded: %s on %s", self.config.model_name, self.device)
+
+    @property
+    def model_vocab_size(self) -> int:
+        """Vocabulary size exposed by the loaded model or tokenizer."""
+        if self._model is not None:
+            vocab_size = get_model_vocab_size(self._model)
+            if vocab_size > 0:
+                return vocab_size
+        if self._tokenizer is not None:
+            return len(self._tokenizer)
+        return 0
 
     def _get_or_create_session(self, session_id: str) -> DraftCacheState:
         """Get or create a per-session cache state.
@@ -245,25 +276,10 @@ class DraftEngine:
             # Case A: Exact match — O(1) reuse, no forward pass needed.
             past_kv = cache_state.kv_cache
             last_logits = cache_state.cached_last_logits
-        elif match_len > 0:
-            # Case B: Extension or rollback — crop to match_len-1, process tail.
-            # One-token forward generates last_logits while reusing prefix cache.
-            reuse_len = match_len - 1
-            past_kv = None
-            new_ids = prompt_ids
-            if reuse_len > 0:
-                past_kv = cache_state.kv_cache
-
-                if cache_state.cached_prompt_len > reuse_len:
-                    if hasattr(past_kv, "crop"):
-                        past_kv.crop(reuse_len)
-                    elif isinstance(past_kv, tuple):
-                        past_kv = tuple(
-                            (k[:, :, :reuse_len, :], v[:, :, :reuse_len, :])
-                            for k, v in past_kv
-                        )
-
-                new_ids = prompt_ids[reuse_len:]
+        elif match_len == cache_state.cached_prompt_len and match_len < len(prompt_ids):
+            # Case B: Pure extension — keep the full cache and only process the suffix.
+            past_kv = cache_state.kv_cache
+            new_ids = prompt_ids[match_len:]
 
             new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
             with torch.no_grad():
@@ -274,8 +290,35 @@ class DraftEngine:
                 )
             past_kv = prefix_out.past_key_values
             last_logits = prefix_out.logits[:, -1, :]
+        elif match_len > 0:
+            # Case C: Partial overlap — only reusable when the cache supports rollback.
+            reuse_len = match_len - 1
+            if reuse_len > 0 and cache_supports_crop(cache_state.kv_cache):
+                past_kv = crop_cache(cache_state.kv_cache, reuse_len)
+                new_ids = prompt_ids[reuse_len:]
+
+                new_input = torch.tensor([new_ids], dtype=torch.long, device=self.device)
+                with torch.no_grad():
+                    prefix_out = self._model(
+                        input_ids=new_input,
+                        past_key_values=past_kv,
+                        use_cache=True,
+                    )
+                past_kv = prefix_out.past_key_values
+                last_logits = prefix_out.logits[:, -1, :]
+            else:
+                # Hybrid recurrent caches cannot be rolled back safely; rebuild.
+                input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
+                with torch.no_grad():
+                    prefix_out = self._model(
+                        input_ids=input_ids,
+                        past_key_values=None,
+                        use_cache=True,
+                    )
+                past_kv = prefix_out.past_key_values
+                last_logits = prefix_out.logits[:, -1, :]
         else:
-            # Case C: Complete mismatch or empty cache — full O(N) recompute.
+            # Case D: Complete mismatch or empty cache — full O(N) recompute.
             input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
             with torch.no_grad():
                 prefix_out = self._model(
@@ -405,32 +448,12 @@ class DraftEngine:
             # Stack KV caches along batch dimension
             first_kv = expansion_items[0][3]
             if first_kv is not None:
-                # 1. Normalize all incoming KV caches to legacy tuples
-                legacy_kvs = []
-                for item in expansion_items:
-                    kv = item[3]
-                    if hasattr(kv, "to_legacy_cache"):
-                        legacy_kvs.append(kv.to_legacy_cache())
-                    elif hasattr(kv, "layers") and isinstance(kv.layers, (list, tuple)):
-                        legacy_kvs.append(
-                            tuple((lyr.keys, lyr.values) for lyr in kv.layers)
-                        )
-                    else:
-                        legacy_kvs.append(kv)
-
-                # 2. Vectorized batch: native torch.cat per layer over the batch dimension
-                # Replaces O(layers * batch) flat iterations and reshaping with direct layer concatenation
-                n_layers = len(legacy_kvs[0])
-                batch_past_kv = tuple(
-                    (
-                        torch.cat([legacy_kvs[j][l][0] for j in range(total_items)], dim=0),
-                        torch.cat([legacy_kvs[j][l][1] for j in range(total_items)], dim=0),
+                batch_past_kv = batch_model_caches([item[3] for item in expansion_items])
+                if isinstance(batch_past_kv, tuple):
+                    batch_past_kv = legacy_to_dynamic_cache(
+                        batch_past_kv,
+                        get_model_config(self._model),
                     )
-                    for l in range(n_layers)
-                )
-
-                # 3. Pass batched legacy tuple — HF models accept it; avoid DynamicCache
-                # conversion so test mocks (expecting tuple) and real models both work.
             else:
                 batch_past_kv = None
 
@@ -460,26 +483,10 @@ class DraftEngine:
                     parent_node.children.append(child_node)
 
                 # Extract this item's KV cache from the batched output (Fix Bug 1).
-                # When model returns DynamicCache, convert to legacy and slice per beam.
-                pkv = step_out.past_key_values
-                legacy_pkv = None
-                if isinstance(pkv, tuple):
-                    legacy_pkv = pkv
-                elif hasattr(pkv, "to_legacy_cache"):
-                    legacy_pkv = pkv.to_legacy_cache()
-                elif hasattr(pkv, "layers") and isinstance(pkv.layers, (list, tuple)):
-                    legacy_pkv = tuple(
-                        (layer.keys, layer.values)
-                        for layer in pkv.layers
-                        if getattr(layer, "is_initialized", True)
-                        and getattr(layer, "keys", None) is not None
-                    )
-                if legacy_pkv is not None:
-                    branch_past_kv = tuple(
-                        tuple(t[i : i + 1] for t in layer) for layer in legacy_pkv
-                    )
-                else:
-                    branch_past_kv = pkv
+                branch_past_kv = slice_batch_item_from_cache(
+                    step_out.past_key_values,
+                    i,
+                )
 
                 next_level_entries.append((
                     child_node,

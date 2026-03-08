@@ -151,7 +151,12 @@ class DraftServiceServicer(spec_decoding_pb2_grpc.DraftServiceServicer):
     ) -> spec_decoding_pb2.PingResponse:
         """Health check endpoint."""
         logger.debug("Ping received")
-        return spec_decoding_pb2.PingResponse(status="ok", worker_type="draft")
+        return spec_decoding_pb2.PingResponse(
+            status="ok",
+            worker_type="draft",
+            model_name=self._engine.config.model_name,
+            vocab_size=self._engine.model_vocab_size,
+        )
 
 
 def serve(config: DraftWorkerConfig | None = None) -> None:

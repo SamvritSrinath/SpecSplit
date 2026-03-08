@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -89,6 +90,7 @@ def _make_mock_target_model(
     model.config.num_key_value_heads = 4
     model.config.hidden_size = 32  # 4 heads * 8 head_dim
     model.config.max_position_embeddings = 512
+    model.config.vocab_size = vocab_size
 
     accept_list = accept_tokens or []
 
@@ -165,11 +167,39 @@ def _make_mock_target_model(
     return model
 
 
+def _write_llama_checkpoint_config(
+    checkpoint_dir,
+    *,
+    include_quantization: bool = False,
+    torch_dtype: str = "bfloat16",
+) -> None:
+    """Write a minimal local config.json matching the local Llama checkpoints."""
+    payload = {
+        "architectures": ["LlamaForCausalLM"],
+        "model_type": "llama",
+        "num_hidden_layers": 2,
+        "num_attention_heads": 4,
+        "num_key_value_heads": 4,
+        "hidden_size": 32,
+        "max_position_embeddings": 512,
+        "vocab_size": 128256,
+        "torch_dtype": torch_dtype,
+    }
+    if include_quantization:
+        payload["quantization_config"] = {
+            "quant_method": "bitsandbytes",
+            "bnb_4bit_compute_dtype": "bfloat16",
+            "load_in_4bit": True,
+        }
+    (checkpoint_dir / "config.json").write_text(json.dumps(payload))
+
+
 def _make_mock_tokenizer() -> MagicMock:
     """Create a mock tokenizer with pad_token set."""
     tokenizer = MagicMock()
     tokenizer.pad_token = "<pad>"
     tokenizer.eos_token = "<eos>"
+    tokenizer.__len__.return_value = 100
     return tokenizer
 
 
@@ -190,6 +220,36 @@ class TestTargetEngineInit:
 
     def test_init_max_sessions(self, target_engine: TargetEngine) -> None:
         assert target_engine.config.max_sessions == 3
+
+    @patch("specsplit.workers.target.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.target.engine.AutoModelForCausalLM.from_pretrained")
+    def test_load_model_uses_checkpoint_dtype_from_quantized_llama_config(
+        self,
+        mock_causal_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        tmp_path,
+    ) -> None:
+        """Local quantized Llama checkpoints should load with BF16 compute dtype."""
+        checkpoint_dir = tmp_path / "Meta-Llama-3.1-70B-BNB-NF4-BF16"
+        checkpoint_dir.mkdir()
+        _write_llama_checkpoint_config(checkpoint_dir, include_quantization=True)
+
+        mock_model = _make_mock_target_model(vocab_size=128256)
+        mock_causal_cls.return_value = mock_model
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = TargetWorkerConfig(model_name=str(checkpoint_dir), device="cpu", max_sessions=3)
+        engine = TargetEngine(config=config)
+        engine.load_model()
+
+        assert engine.is_loaded
+        mock_causal_cls.assert_called_once_with(
+            str(checkpoint_dir),
+            attn_implementation=config.attn_implementation,
+            low_cpu_mem_usage=True,
+            dtype=torch.bfloat16,
+        )
+        assert engine.model_vocab_size == 128256
 
 
 # =========================================================================
@@ -236,6 +296,14 @@ class TestSessionManagement:
 
     def test_end_session_nonexistent(self, target_engine: TargetEngine) -> None:
         assert target_engine.end_session("no-such-session") is False
+
+    def test_has_usable_session_requires_nonzero_seq_len(self, target_engine: TargetEngine) -> None:
+        cache, _ = target_engine.get_or_create_session("sess-usable")
+        assert target_engine.has_session("sess-usable") is True
+        assert target_engine.has_usable_session("sess-usable") is False
+
+        cache.seq_len = 5
+        assert target_engine.has_usable_session("sess-usable") is True
 
 
 # =========================================================================

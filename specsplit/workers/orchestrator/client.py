@@ -26,13 +26,57 @@ import grpc.aio
 
 from specsplit.core.config import OrchestratorConfig, load_config_file
 from specsplit.core.telemetry import TelemetryLogger
-from specsplit.proto import spec_decoding_pb2_grpc
+from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.orchestrator.pipeline import (
     PipelineResult,
     run_speculative_loop_async,
 )
 
 logger = logging.getLogger(__name__)
+
+
+def _resolve_tokenizer_model(
+    requested_model_name: str | None,
+    *,
+    draft_model_name: str = "",
+    target_model_name: str = "",
+) -> str:
+    """Choose a tokenizer model, preferring the worker model env vars over bare gpt2."""
+    requested = requested_model_name or "gpt2"
+    if requested != "gpt2":
+        return requested
+
+    if target_model_name:
+        logger.info(
+            "Tokenizer model not explicitly set; using target worker model=%s",
+            target_model_name,
+        )
+        return target_model_name
+
+    if draft_model_name:
+        logger.info(
+            "Tokenizer model not explicitly set; using draft worker model=%s",
+            draft_model_name,
+        )
+        return draft_model_name
+
+    target_model = os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
+    if target_model:
+        logger.info(
+            "Tokenizer model not explicitly set; using SPECSPLIT_TARGET_MODEL_NAME=%s",
+            target_model,
+        )
+        return target_model
+
+    draft_model = os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
+    if draft_model:
+        logger.info(
+            "Tokenizer model not explicitly set; using SPECSPLIT_DRAFT_MODEL_NAME=%s",
+            draft_model,
+        )
+        return draft_model
+
+    return requested
 
 
 class Orchestrator:
@@ -57,7 +101,7 @@ class Orchestrator:
         model_name: str = "gpt2",
     ) -> None:
         self.config = config or OrchestratorConfig()
-        self.model_name = model_name
+        self.model_name = _resolve_tokenizer_model(model_name)
         self._telemetry = TelemetryLogger(service_name="orchestrator")
         self._draft_channel: grpc.Channel | None = None
         self._target_channel: grpc.Channel | None = None
@@ -67,6 +111,11 @@ class Orchestrator:
         self._tokenizer: Any = None
         self._vocab_bridge: Any | None = None
         self._sync_executor: concurrent.futures.ThreadPoolExecutor | None = None
+        self._draft_worker_model_name: str = ""
+        self._target_worker_model_name: str = ""
+        self._draft_worker_vocab_size: int = 0
+        self._target_worker_vocab_size: int = 0
+        self._workers_probed: bool = False
 
         logger.info(
             "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s, max_draft=%d, draft_temp=%.2f)",
@@ -86,14 +135,31 @@ class Orchestrator:
         if self._tokenizer is None:
             from transformers import AutoTokenizer
 
+            worker_vocabs = {
+                vocab_size
+                for vocab_size in (self._draft_worker_vocab_size, self._target_worker_vocab_size)
+                if vocab_size > 0
+            }
+            if (
+                self.model_name == "gpt2"
+                and worker_vocabs
+                and any(vocab_size != 50257 for vocab_size in worker_vocabs)
+            ):
+                raise RuntimeError(
+                    "Tokenizer model is unresolved: orchestrator is still on gpt2, but workers report "
+                    f"non-gpt2 vocab sizes {sorted(worker_vocabs)}. Restart the workers after updating "
+                    "their code so Ping returns model metadata, or pass --model-name / "
+                    "SPECSPLIT_ORCH_TOKENIZER_MODEL explicitly."
+                )
+
             self._tokenizer = AutoTokenizer.from_pretrained(self.model_name)
             if self._tokenizer.pad_token is None:
                 self._tokenizer.pad_token = self._tokenizer.eos_token
             logger.info("Tokenizer loaded: %s", self.model_name)
             
             # Check draft and target vocabularies
-            draft_model_env = os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
-            target_model_env = os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
+            draft_model_env = self._draft_worker_model_name or os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
+            target_model_env = self._target_worker_model_name or os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
             
             if draft_model_env and target_model_env and draft_model_env != target_model_env:
                 logger.info("Draft and Target use different models. Checking vocabulary alignment...")
@@ -117,6 +183,51 @@ class Orchestrator:
                         logger.info("strict_vocab_check is False. Initialized VocabBridge.")
 
         return self._tokenizer
+
+    async def _refresh_worker_metadata(self) -> None:
+        """Probe the workers for model metadata and adopt it when tokenizer is unset."""
+        if self._workers_probed:
+            return
+        if self._draft_stub is None or self._target_stub is None:
+            return
+
+        try:
+            draft_ping = self._draft_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
+            if inspect.isawaitable(draft_ping):
+                draft_ping = await draft_ping
+        except Exception as exc:
+            logger.warning("Draft worker metadata probe failed: %s", exc)
+            draft_ping = None
+
+        try:
+            target_ping = self._target_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
+            if inspect.isawaitable(target_ping):
+                target_ping = await target_ping
+        except Exception as exc:
+            logger.warning("Target worker metadata probe failed: %s", exc)
+            target_ping = None
+
+        if draft_ping is not None:
+            self._draft_worker_model_name = getattr(draft_ping, "model_name", "") or ""
+            self._draft_worker_vocab_size = int(getattr(draft_ping, "vocab_size", 0) or 0)
+        if target_ping is not None:
+            self._target_worker_model_name = getattr(target_ping, "model_name", "") or ""
+            self._target_worker_vocab_size = int(getattr(target_ping, "vocab_size", 0) or 0)
+
+        resolved_model_name = _resolve_tokenizer_model(
+            self.model_name,
+            draft_model_name=self._draft_worker_model_name,
+            target_model_name=self._target_worker_model_name,
+        )
+        if resolved_model_name != self.model_name:
+            logger.info(
+                "Tokenizer model updated from %s to %s after worker probe",
+                self.model_name,
+                resolved_model_name,
+            )
+            self.model_name = resolved_model_name
+
+        self._workers_probed = True
 
     def connect(self) -> None:
         """Establish async gRPC channels to Draft and Target workers."""
@@ -173,6 +284,7 @@ class Orchestrator:
         if self._draft_channel is None:
             self.connect()
 
+        await self._refresh_worker_metadata()
         tokenizer = self._ensure_tokenizer()
         prompt_ids: list[int] = tokenizer.encode(prompt)
         eos_token_id: int = tokenizer.eos_token_id or 2
@@ -497,18 +609,28 @@ def main() -> None:
         model_name = file_cfg["tokenizer_model"]
     else:
         model_name = config.tokenizer_model
+    model_name = _resolve_tokenizer_model(model_name)
 
     # Warn if orchestrator tokenizer differs from worker model env vars
     draft_model_env = os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
     target_model_env = os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
-    if draft_model_env and draft_model_env != model_name:
+    worker_model_names = {name for name in (draft_model_env, target_model_env) if name}
+    if draft_model_env and target_model_env and model_name not in worker_model_names:
+        logger.warning(
+            "Tokenizer mismatch: orchestrator uses '%s' but workers use '%s' and '%s'. "
+            "Speculative decoding requires identical vocabularies.",
+            model_name,
+            draft_model_env,
+            target_model_env,
+        )
+    elif draft_model_env and draft_model_env != model_name and not target_model_env:
         logger.warning(
             "Tokenizer mismatch: orchestrator uses '%s' but SPECSPLIT_DRAFT_MODEL_NAME='%s'. "
             "Speculative decoding requires identical vocabularies.",
             model_name,
             draft_model_env,
         )
-    if target_model_env and target_model_env != model_name:
+    elif target_model_env and target_model_env != model_name and not draft_model_env:
         logger.warning(
             "Tokenizer mismatch: orchestrator uses '%s' but SPECSPLIT_TARGET_MODEL_NAME='%s'. "
             "Speculative decoding requires identical vocabularies.",
