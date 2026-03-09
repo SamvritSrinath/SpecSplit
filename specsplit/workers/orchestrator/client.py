@@ -29,7 +29,7 @@ import grpc
 import grpc.aio
 
 from specsplit.core.config import OrchestratorConfig, load_config_file
-from specsplit.core.telemetry import TelemetryLogger
+from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.orchestrator.pipeline import (
     PipelineResult,
@@ -231,9 +231,9 @@ class Orchestrator:
 
     def _ensure_tokenizer(self) -> Any:
         """Lazily load the HuggingFace tokenizer on first use.
-        
-        Also validates vocabulary alignment between draft/target models if they differ.
-        If strict_vocab_check is False, it initializes the VocabBridge here.
+
+        Uses worker-reported Ping metadata for vocabulary checks so the
+        orchestrator does not need direct filesystem access to worker model paths.
         """
         if self._tokenizer is None:
             from transformers import AutoTokenizer
@@ -259,31 +259,36 @@ class Orchestrator:
             if self._tokenizer.pad_token is None:
                 self._tokenizer.pad_token = self._tokenizer.eos_token
             logger.info("Tokenizer loaded: %s", self.model_name)
-            
-            # Check draft and target vocabularies
+
+            # Prefer worker-reported vocab sizes from Ping over loading the
+            # draft/target tokenizer paths locally. Those paths may not exist
+            # on the orchestrator host even when the workers themselves are healthy.
             draft_model_env = self._draft_worker_model_name or os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
             target_model_env = self._target_worker_model_name or os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
-            
+
             if draft_model_env and target_model_env and draft_model_env != target_model_env:
-                logger.info("Draft and Target use different models. Checking vocabulary alignment...")
-                draft_tokenizer = AutoTokenizer.from_pretrained(draft_model_env)
-                target_tokenizer = AutoTokenizer.from_pretrained(target_model_env)
-                
-                if len(draft_tokenizer) != len(target_tokenizer):
-                    if self.config.strict_vocab_check:
-                        msg = (
-                            f"Vocabulary mismatch: Draft vocab size {len(draft_tokenizer)}, "
-                            f"Target vocab size {len(target_tokenizer)}. "
-                            "With strict_vocab_check=True, heterogeneous models must "
-                            "have the same vocabulary size. Set strict_vocab_check=False "
-                            "to enable VocabBridge."
+                logger.info(
+                    "Draft and Target use different models. Comparing reported vocab sizes from Ping."
+                )
+                if self._draft_worker_vocab_size > 0 and self._target_worker_vocab_size > 0:
+                    if self._draft_worker_vocab_size != self._target_worker_vocab_size:
+                        logger.warning(
+                            "Draft and Target report different vocab sizes (%d vs %d). "
+                            "Proceeding without local tokenizer-path validation; "
+                            "token ID mapping is not initialized.",
+                            self._draft_worker_vocab_size,
+                            self._target_worker_vocab_size,
                         )
-                        logger.error(msg)
-                        raise RuntimeError(msg)
                     else:
-                        from specsplit.workers.orchestrator.vocab_bridge import VocabBridge
-                        self._vocab_bridge = VocabBridge(draft_tokenizer, target_tokenizer)
-                        logger.info("strict_vocab_check is False. Initialized VocabBridge.")
+                        logger.info(
+                            "Draft and Target report matching vocab sizes (%d).",
+                            self._draft_worker_vocab_size,
+                        )
+                else:
+                    logger.warning(
+                        "Draft and Target use different models, but Ping did not provide both vocab sizes. "
+                        "Skipping local tokenizer-path validation."
+                    )
 
         return self._tokenizer
 
@@ -302,27 +307,32 @@ class Orchestrator:
             request_id=draft_request_id,
             timeout_s=self.config.timeout_s,
         )
+        draft_sw = Stopwatch().start()
         try:
             draft_ping = self._draft_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
             if inspect.isawaitable(draft_ping):
                 draft_ping = await draft_ping
         except Exception as exc:
+            draft_sw.stop()
             self._telemetry.record_event(
                 "rpc_error",
                 rpc="Ping",
                 peer="draft",
                 request_id=draft_request_id,
+                elapsed_ms=draft_sw.elapsed_ms,
                 error=type(exc).__name__,
                 error_details=str(exc),
             )
             logger.warning("Draft worker metadata probe failed: %s", exc)
             draft_ping = None
         else:
+            draft_sw.stop()
             self._telemetry.record_event(
                 "rpc_response_received",
                 rpc="Ping",
                 peer="draft",
                 request_id=draft_request_id,
+                elapsed_ms=draft_sw.elapsed_ms,
                 worker_status=getattr(draft_ping, "status", ""),
                 model_name=getattr(draft_ping, "model_name", ""),
                 vocab_size=int(getattr(draft_ping, "vocab_size", 0) or 0),
@@ -336,27 +346,32 @@ class Orchestrator:
             request_id=target_request_id,
             timeout_s=self.config.timeout_s,
         )
+        target_sw = Stopwatch().start()
         try:
             target_ping = self._target_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
             if inspect.isawaitable(target_ping):
                 target_ping = await target_ping
         except Exception as exc:
+            target_sw.stop()
             self._telemetry.record_event(
                 "rpc_error",
                 rpc="Ping",
                 peer="target",
                 request_id=target_request_id,
+                elapsed_ms=target_sw.elapsed_ms,
                 error=type(exc).__name__,
                 error_details=str(exc),
             )
             logger.warning("Target worker metadata probe failed: %s", exc)
             target_ping = None
         else:
+            target_sw.stop()
             self._telemetry.record_event(
                 "rpc_response_received",
                 rpc="Ping",
                 peer="target",
                 request_id=target_request_id,
+                elapsed_ms=target_sw.elapsed_ms,
                 worker_status=getattr(target_ping, "status", ""),
                 model_name=getattr(target_ping, "model_name", ""),
                 vocab_size=int(getattr(target_ping, "vocab_size", 0) or 0),

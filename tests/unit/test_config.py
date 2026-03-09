@@ -2,11 +2,13 @@
 
 from __future__ import annotations
 
+import logging
+
 import pytest
 from pydantic import ValidationError
 
 from specsplit.core.config import DraftWorkerConfig, OrchestratorConfig, TargetWorkerConfig
-from specsplit.workers.orchestrator.client import _resolve_tokenizer_model
+from specsplit.workers.orchestrator.client import Orchestrator, _resolve_tokenizer_model
 
 
 class TestDraftWorkerConfig:
@@ -87,3 +89,69 @@ class TestOrchestratorConfig:
             draft_model_name="/models/ping-draft",
             target_model_name="/models/ping-target",
         ) == "/models/ping-target"
+
+    def test_ensure_tokenizer_uses_ping_vocab_sizes_without_loading_worker_paths(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        calls: list[str] = []
+
+        class _FakeTokenizer:
+            pad_token = None
+            eos_token = "</s>"
+
+        def _fake_from_pretrained(model_name: str):
+            calls.append(model_name)
+            return _FakeTokenizer()
+
+        import transformers
+
+        monkeypatch.setattr(
+            transformers.AutoTokenizer,
+            "from_pretrained",
+            staticmethod(_fake_from_pretrained),
+        )
+
+        orch = Orchestrator(
+            config=OrchestratorConfig(strict_vocab_check=True),
+            model_name="meta-llama/Llama-3.1-8B",
+        )
+        orch._draft_worker_model_name = "/bad/draft/path"
+        orch._target_worker_model_name = "/bad/target/path"
+        orch._draft_worker_vocab_size = 128256
+        orch._target_worker_vocab_size = 128256
+
+        orch._ensure_tokenizer()
+
+        assert calls == ["meta-llama/Llama-3.1-8B"]
+
+    def test_ensure_tokenizer_warns_on_ping_vocab_mismatch_instead_of_crashing(
+        self,
+        monkeypatch: pytest.MonkeyPatch,
+        caplog: pytest.LogCaptureFixture,
+    ) -> None:
+        class _FakeTokenizer:
+            pad_token = None
+            eos_token = "</s>"
+
+        import transformers
+
+        monkeypatch.setattr(
+            transformers.AutoTokenizer,
+            "from_pretrained",
+            staticmethod(lambda _: _FakeTokenizer()),
+        )
+
+        orch = Orchestrator(
+            config=OrchestratorConfig(strict_vocab_check=True),
+            model_name="meta-llama/Llama-3.1-8B",
+        )
+        orch._draft_worker_model_name = "/bad/draft/path"
+        orch._target_worker_model_name = "/bad/target/path"
+        orch._draft_worker_vocab_size = 32000
+        orch._target_worker_vocab_size = 64000
+
+        with caplog.at_level(logging.WARNING):
+            orch._ensure_tokenizer()
+
+        assert "different vocab sizes" in caplog.text
