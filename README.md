@@ -216,9 +216,24 @@ SPECSPLIT_ORCH_DRAFT_ADDRESS=localhost:50051 \
 SPECSPLIT_ORCH_TARGET_ADDRESS=localhost:50052 \
     python -m specsplit.workers.orchestrator.client \
         --prompt "Explain the key ideas behind quantum computing." \
-        --max-rounds 20 \
-        --telemetry-output telemetry_spans.json
+        --max-rounds 20
 ```
+
+Each orchestrator run now writes a timestamped telemetry artifact under
+`telemetry/` by default, for example
+`telemetry/orchestrator-run-20260308T101112.123456-0800.json`. The artifact
+includes:
+
+- the benchmark-style summary metrics previously surfaced by the gamma sweep
+  harness (`ttft_ms`, `tpot_ms`, acceptance, network idle, total latency, rounds)
+- the effective orchestrator configuration and the relevant `SPECSPLIT_*`
+  environment variables used for the run
+- a detailed timeline of orchestrator-visible RPC send/receive/error events for
+  Draft, Target, `Ping`, and `EndSession`, including worker telemetry returned
+  in responses
+
+Use `--telemetry-output` to override the destination. Pass either a JSON file
+path or a directory; directories receive a timestamped run file automatically.
 
 > **Note:** For local testing without GPUs, use CPU mode by setting
 > `SPECSPLIT_DRAFT_DEVICE=cpu` and `SPECSPLIT_TARGET_DEVICE=cpu`. CPU mode is

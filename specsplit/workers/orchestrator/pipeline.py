@@ -187,6 +187,7 @@ class PipelineResult:
     network_idle_ms: float = 0.0
     per_round_acceptance: list[dict[str, Any]] = field(default_factory=list)
     telemetry: list[dict[str, Any]] = field(default_factory=list)
+    timeline_events: list[dict[str, Any]] = field(default_factory=list)
 
 
 # ============================================================================
@@ -349,6 +350,41 @@ def _get_longest_path(draft: DraftTree) -> list[int]:
     return best_path
 
 
+def _worker_telemetry_to_dict(metadata: Any) -> dict[str, Any]:
+    """Convert protobuf TelemetryMetadata into a JSON-serializable dict."""
+    if metadata is None:
+        return {}
+
+    return {
+        "span_id": getattr(metadata, "span_id", ""),
+        "wall_time_ms": float(getattr(metadata, "wall_time_ms", 0.0) or 0.0),
+        "model_time_ms": float(getattr(metadata, "model_time_ms", 0.0) or 0.0),
+        "tokens_processed": int(getattr(metadata, "tokens_processed", 0) or 0),
+        "device": getattr(metadata, "device", ""),
+    }
+
+
+def _record_rpc_event(
+    telemetry: TelemetryLogger | None,
+    event_type: str,
+    *,
+    rpc: str,
+    peer: str,
+    request_id: str,
+    **metadata: Any,
+) -> None:
+    """Record a structured RPC event when telemetry is enabled."""
+    if telemetry is None:
+        return
+    telemetry.record_event(
+        event_type,
+        rpc=rpc,
+        peer=peer,
+        request_id=request_id,
+        **metadata,
+    )
+
+
 # ============================================================================
 # Async gRPC Stub Wrappers — Real gRPC calls
 # ============================================================================
@@ -363,6 +399,7 @@ async def _call_generate_drafts(
     draft_len: int,
     reset_cache: bool = False,
     session_id: str | None = None,
+    telemetry: TelemetryLogger | None = None,
 ) -> _RpcResult[DraftTree]:
     """Call ``DraftService.GenerateDrafts`` over gRPC.
 
@@ -404,18 +441,63 @@ async def _call_generate_drafts(
         reset_cache=reset_cache,
         session_id=session_id or "",
     )
+    _record_rpc_event(
+        telemetry,
+        "rpc_request_sent",
+        rpc="GenerateDrafts",
+        peer="draft",
+        request_id=request.request_id,
+        round_idx=round_idx,
+        session_id=session_id or "",
+        prompt_token_count=len(prompt_ids),
+        context_token_count=len(context_ids),
+        draft_len=draft_len,
+        reset_cache=reset_cache,
+        draft_temperature=config.draft_temperature,
+    )
 
     # Issue 9: Pass timeout to prevent indefinite hangs
-    response = draft_stub.GenerateDrafts(request, timeout=config.timeout_s)
-    # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
-    if inspect.isawaitable(response):
-        response = await response
+    try:
+        response = draft_stub.GenerateDrafts(request, timeout=config.timeout_s)
+        # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
+        if inspect.isawaitable(response):
+            response = await response
+    except Exception as exc:
+        rpc_sw.stop()
+        code = exc.code().name if isinstance(exc, grpc.aio.AioRpcError) else type(exc).__name__
+        details = exc.details() if isinstance(exc, grpc.aio.AioRpcError) else str(exc)
+        _record_rpc_event(
+            telemetry,
+            "rpc_error",
+            rpc="GenerateDrafts",
+            peer="draft",
+            request_id=request.request_id,
+            round_idx=round_idx,
+            session_id=session_id or "",
+            elapsed_ms=rpc_sw.elapsed_ms,
+            error_code=code,
+            error_details=details,
+        )
+        raise
 
     rpc_sw.stop()
 
     # Convert the nested proto tree to flat arrays
     proto_nodes = list(response.draft_tree)
     token_ids, topology_map = _flatten_proto_tree(proto_nodes)
+    _record_rpc_event(
+        telemetry,
+        "rpc_response_received",
+        rpc="GenerateDrafts",
+        peer="draft",
+        request_id=request.request_id,
+        round_idx=round_idx,
+        session_id=session_id or "",
+        elapsed_ms=rpc_sw.elapsed_ms,
+        draft_node_count=len(token_ids),
+        draft_root_count=len(proto_nodes),
+        worker_telemetry=_worker_telemetry_to_dict(getattr(response, "telemetry", None)),
+    )
 
     logger.debug(
         "Draft RPC completed: round=%d, tokens=%d, rpc_ms=%.2f",
@@ -441,6 +523,7 @@ async def _call_verify_drafts(
     new_token_ids: list[int] | None = None,
     expected_prefix_length: int = 0,
     vocab_bridge: Any | None = None,
+    telemetry: TelemetryLogger | None = None,
 ) -> _RpcResult[VerificationResult]:
     """Call ``TargetService.VerifyDrafts`` over gRPC.
 
@@ -490,12 +573,44 @@ async def _call_verify_drafts(
         new_token_ids=target_new_token_ids,
         expected_prefix_length=target_expected_prefix_length,
     )
+    _record_rpc_event(
+        telemetry,
+        "rpc_request_sent",
+        rpc="VerifyDrafts",
+        peer="target",
+        request_id=request.request_id,
+        round_idx=draft_tree.round_idx,
+        session_id=session_id or "",
+        context_token_count=len(target_context_ids),
+        delta_token_count=len(target_new_token_ids),
+        expected_prefix_length=target_expected_prefix_length,
+        draft_node_count=len(draft_tree.token_ids),
+        verify_temperature=config.verify_temperature,
+    )
 
     # Issue 9: Pass timeout to prevent indefinite hangs
-    response = target_stub.VerifyDrafts(request, timeout=config.timeout_s)
-    # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
-    if inspect.isawaitable(response):
-        response = await response
+    try:
+        response = target_stub.VerifyDrafts(request, timeout=config.timeout_s)
+        # Support both sync and async stubs (UnaryUnaryCall is awaitable but not a coroutine/future)
+        if inspect.isawaitable(response):
+            response = await response
+    except Exception as exc:
+        rpc_sw.stop()
+        code = exc.code().name if isinstance(exc, grpc.aio.AioRpcError) else type(exc).__name__
+        details = exc.details() if isinstance(exc, grpc.aio.AioRpcError) else str(exc)
+        _record_rpc_event(
+            telemetry,
+            "rpc_error",
+            rpc="VerifyDrafts",
+            peer="target",
+            request_id=request.request_id,
+            round_idx=draft_tree.round_idx,
+            session_id=session_id or "",
+            elapsed_ms=rpc_sw.elapsed_ms,
+            error_code=code,
+            error_details=details,
+        )
+        raise
 
     rpc_sw.stop()
 
@@ -512,6 +627,22 @@ async def _call_verify_drafts(
         accepted_tokens = [vocab_bridge.target_to_draft_id(t) for t in accepted_tokens]
         if bonus is not None:
             bonus = vocab_bridge.target_to_draft_id(bonus)
+    _record_rpc_event(
+        telemetry,
+        "rpc_response_received",
+        rpc="VerifyDrafts",
+        peer="target",
+        request_id=request.request_id,
+        round_idx=draft_tree.round_idx,
+        session_id=session_id or "",
+        elapsed_ms=rpc_sw.elapsed_ms,
+        accepted_token_count=len(accepted_tokens),
+        accepted_length=int(getattr(response, "num_accepted", 0) or 0),
+        correction_token_id=bonus,
+        has_correction=bonus is not None,
+        cache_hit=bool(getattr(response, "cache_hit", False)),
+        worker_telemetry=_worker_telemetry_to_dict(getattr(response, "telemetry", None)),
+    )
 
     logger.debug(
         "Verify RPC completed: round=%d, accepted=%d/%d, correction=%s, rpc_ms=%.2f",
@@ -534,6 +665,7 @@ async def _call_verify_drafts(
 async def _call_flush_target_cache(
     target_stub: Any,
     session_id: str,
+    telemetry: TelemetryLogger | None = None,
 ) -> None:
     """Send an ``EndSession`` signal to flush the Target Worker's KV cache.
 
@@ -545,17 +677,46 @@ async def _call_flush_target_cache(
         session_id: Session ID to flush.
     """
     request = spec_decoding_pb2.EndSessionRequest(session_id=session_id)
+    _record_rpc_event(
+        telemetry,
+        "rpc_request_sent",
+        rpc="EndSession",
+        peer="target",
+        request_id=f"end-session-{session_id}",
+        session_id=session_id,
+    )
     try:
         response = target_stub.EndSession(request)
         if inspect.isawaitable(response):
             response = await response
+        _record_rpc_event(
+            telemetry,
+            "rpc_response_received",
+            rpc="EndSession",
+            peer="target",
+            request_id=f"end-session-{session_id}",
+            session_id=session_id,
+            was_active=bool(getattr(response, "was_active", False)),
+        )
         logger.debug(
             "Cache flush completed: session=%s, was_active=%s",
             session_id,
             response.was_active,
         )
-    except Exception:
+    except Exception as exc:
         # EndSession is best-effort; don't break the pipeline
+        code = exc.code().name if isinstance(exc, grpc.aio.AioRpcError) else type(exc).__name__
+        details = exc.details() if isinstance(exc, grpc.aio.AioRpcError) else str(exc)
+        _record_rpc_event(
+            telemetry,
+            "rpc_error",
+            rpc="EndSession",
+            peer="target",
+            request_id=f"end-session-{session_id}",
+            session_id=session_id,
+            error_code=code,
+            error_details=details,
+        )
         logger.debug("Cache flush failed (non-critical): session=%s", session_id)
 
 
@@ -572,6 +733,7 @@ async def run_speculative_loop_async(
     session_id: str = "default",
     eos_token_id: int | None = None,
     vocab_bridge: Any | None = None,
+    telemetry: TelemetryLogger | None = None,
 ) -> PipelineResult:
     """Run the overlapped speculative decoding loop.
 
@@ -611,7 +773,7 @@ async def run_speculative_loop_async(
               f"({result.acceptance_rate:.1%} accepted)")
     """
     cfg = config or OrchestratorConfig()
-    telemetry = TelemetryLogger(service_name="orchestrator-pipeline")
+    telemetry = telemetry or TelemetryLogger(service_name="orchestrator-pipeline")
     pipeline_sw = Stopwatch()
     pipeline_sw.start()
 
@@ -627,6 +789,14 @@ async def run_speculative_loop_async(
         cfg.max_output_tokens,
         cfg.max_draft_tokens,
         cfg.draft_temperature,
+    )
+    telemetry.record_event(
+        "pipeline_started",
+        prompt_token_count=len(prompt_ids),
+        max_rounds=cfg.max_rounds,
+        max_output_tokens=cfg.max_output_tokens,
+        max_draft_tokens=cfg.max_draft_tokens,
+        session_id=session_id,
     )
 
     state.current_k = cfg.max_draft_tokens
@@ -649,14 +819,25 @@ async def run_speculative_loop_async(
                 round_idx=0,
                 draft_len=state.current_k,
                 session_id=session_id,
+                telemetry=telemetry,
             )
         except grpc.aio.AioRpcError as e:
             if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                 logger.warning("Initial draft RPC timed out (timeout=%.1fs)", cfg.timeout_s)
+                telemetry.record_event(
+                    "pipeline_terminated",
+                    reason="initial_draft_timeout",
+                    timeout_s=cfg.timeout_s,
+                )
                 pipeline_sw.stop()
                 return PipelineResult(
                     output_tokens=[], total_rounds=0, acceptance_rate=0.0,
                     speculation_hit_rate=0.0, wall_time_ms=pipeline_sw.elapsed_ms,
+                    telemetry=[s.to_dict() for s in telemetry.spans],
+                    timeline_events=sorted(
+                        (e.to_dict() for e in telemetry.events),
+                        key=lambda event: event["timestamp_ns"],
+                    ),
                 )
             raise
         current_draft = initial_rpc.value
@@ -692,6 +873,14 @@ async def run_speculative_loop_async(
         if current_draft is None:
             logger.warning("No draft tree available at round %d, stopping", round_idx)
             break
+        telemetry.record_event(
+            "round_started",
+            round_idx=round_idx,
+            current_context_token_count=len(current_context),
+            current_draft_node_count=len(current_draft.token_ids),
+            current_k=state.current_k,
+            verified_context_len=verified_context_len,
+        )
 
         # --------------------------------------------------------------
         # Step A: Launch Verify(N) and speculative Draft(N+1) concurrently
@@ -728,6 +917,7 @@ async def run_speculative_loop_async(
                 new_token_ids=delta_token_ids,
                 expected_prefix_length=verified_context_len,
                 vocab_bridge=vocab_bridge,
+                telemetry=telemetry,
             )
         )
 
@@ -753,6 +943,7 @@ async def run_speculative_loop_async(
                     round_idx=round_idx + 1,
                     draft_len=state.current_k,
                     session_id=session_id,
+                    telemetry=telemetry,
                 )
             )
 
@@ -777,6 +968,12 @@ async def run_speculative_loop_async(
                         cfg.timeout_s,
                     )
                     state.is_finished = True
+                    telemetry.record_event(
+                        "pipeline_terminated",
+                        reason="round_timeout",
+                        round_idx=round_idx,
+                        timeout_s=cfg.timeout_s,
+                    )
                     # Cancel both tasks to avoid "Task was destroyed but it is pending"
                     for t in (verify_task, speculative_draft_task):
                         t.cancel()
@@ -801,6 +998,12 @@ async def run_speculative_loop_async(
                         session_id,
                         round_idx,
                     )
+                    telemetry.record_event(
+                        "verify_retry_full_context",
+                        round_idx=round_idx,
+                        session_id=session_id or "",
+                        reason="cache_evicted_delta_only",
+                    )
                     # Cancel the speculative draft — we'll re-draft after retry
                     speculative_draft_task.cancel()
                     with contextlib.suppress(asyncio.CancelledError):
@@ -816,6 +1019,7 @@ async def run_speculative_loop_async(
                         new_token_ids=None,
                         expected_prefix_length=0,
                         vocab_bridge=vocab_bridge,
+                        telemetry=telemetry,
                     )
                     verify_rpc_result = retry_result
                     # Only add the retry time to the total sum
@@ -830,6 +1034,7 @@ async def run_speculative_loop_async(
                         round_idx=round_idx + 1,
                         draft_len=state.current_k,
                         session_id=session_id,
+                        telemetry=telemetry,
                     )
                     state.total_rpc_time_ms += speculative_draft_rpc_result.elapsed_ms
                 else:
@@ -974,6 +1179,18 @@ async def run_speculative_loop_async(
             verify_result.bonus_token,
             len(state.generated_tokens),
         )
+        telemetry.record_event(
+            "round_verified",
+            round_idx=round_idx,
+            accepted_length=verify_result.accepted_length,
+            accepted_token_count=len(verify_result.accepted_tokens),
+            path_depth=path_depth,
+            tree_node_count=len(current_draft.token_ids),
+            acceptance_rate=round_acc,
+            bonus_token=verify_result.bonus_token,
+            total_output_tokens=len(state.generated_tokens),
+            actual_wait_ms=actual_wait_ms,
+        )
 
         if state.is_finished:
             break
@@ -1057,12 +1274,19 @@ async def run_speculative_loop_async(
                                 round_idx=round_idx + 1,
                                 draft_len=state.current_k,
                                 session_id=session_id,
+                                telemetry=telemetry,
                             )
                         except grpc.aio.AioRpcError as e:
                             if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                                 logger.warning(
                                     "Re-draft RPC timed out at round %d.",
                                     round_idx,
+                                )
+                                telemetry.record_event(
+                                    "pipeline_terminated",
+                                    reason="re_draft_timeout",
+                                    round_idx=round_idx,
+                                    timeout_s=cfg.timeout_s,
                                 )
                                 state.is_finished = True
                                 break
@@ -1116,11 +1340,25 @@ async def run_speculative_loop_async(
                         len(old_ids),
                         len(new_ids),
                     )
+                    telemetry.record_event(
+                        "speculation_result",
+                        round_idx=round_idx,
+                        outcome="hit",
+                        matched_root_idx=matched_root_idx,
+                        reused_node_count=len(new_ids),
+                    )
             else:
                 current_draft = speculative_draft
                 logger.info(
                     "Speculation HIT at round %d — reusing draft N+1",
                     round_idx,
+                )
+                telemetry.record_event(
+                    "speculation_result",
+                    round_idx=round_idx,
+                    outcome="hit",
+                    matched_root_idx=matched_root_idx,
+                    reused_node_count=len(speculative_draft.token_ids) if speculative_draft else 0,
                 )
         else:
             # ❌ Speculation miss.  The speculative draft was computed
@@ -1132,6 +1370,13 @@ async def run_speculative_loop_async(
                 round_idx,
                 len(actual_accepted),
                 len(speculative_assumption),
+            )
+            telemetry.record_event(
+                "speculation_result",
+                round_idx=round_idx,
+                outcome="miss",
+                accepted_token_count=len(actual_accepted),
+                assumed_token_count=len(speculative_assumption),
             )
 
             # Target has already rolled back to accepted prefix. Draft engine uses
@@ -1148,12 +1393,19 @@ async def run_speculative_loop_async(
                         round_idx=round_idx + 1,
                         draft_len=state.current_k,
                         session_id=session_id,
+                        telemetry=telemetry,
                     )
                 except grpc.aio.AioRpcError as e:
                     if e.code() == grpc.StatusCode.DEADLINE_EXCEEDED:
                         logger.warning(
                             "Re-draft RPC timed out at round %d. Terminating.",
                             round_idx,
+                        )
+                        telemetry.record_event(
+                            "pipeline_terminated",
+                            reason="re_draft_timeout",
+                            round_idx=round_idx,
+                            timeout_s=cfg.timeout_s,
                         )
                         state.is_finished = True
                         break
@@ -1193,6 +1445,23 @@ async def run_speculative_loop_async(
             for m in state.per_round_metrics
         ],
         telemetry=[s.to_dict() for s in telemetry.spans],
+        timeline_events=sorted(
+            (e.to_dict() for e in telemetry.events),
+            key=lambda event: event["timestamp_ns"],
+        ),
+    )
+    telemetry.record_event(
+        "pipeline_completed",
+        output_token_count=len(result.output_tokens),
+        total_rounds=result.total_rounds,
+        acceptance_rate=result.acceptance_rate,
+        speculation_hit_rate=result.speculation_hit_rate,
+        wall_time_ms=result.wall_time_ms,
+        network_idle_ms=result.network_idle_ms,
+    )
+    result.timeline_events = sorted(
+        (e.to_dict() for e in telemetry.events),
+        key=lambda event: event["timestamp_ns"],
     )
 
     logger.info(

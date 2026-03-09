@@ -16,9 +16,13 @@ import argparse
 import asyncio
 import concurrent.futures
 import inspect
+import json
 import logging
 import os
 import uuid
+from datetime import datetime
+from pathlib import Path
+from typing import Mapping
 from typing import Any
 
 import grpc
@@ -79,6 +83,103 @@ def _resolve_tokenizer_model(
     return requested
 
 
+def _ttft_from_telemetry(telemetry: list[dict[str, Any]]) -> float:
+    """Compute Time-to-First-Token from pipeline telemetry spans."""
+    initial_draft_ms = next(
+        (span["wall_time_ms"] for span in telemetry if span["operation"] == "initial_draft"),
+        0.0,
+    )
+    first_round_ms = next(
+        (
+            span["wall_time_ms"]
+            for span in telemetry
+            if span["operation"] == "overlapped_round"
+            and span.get("metadata", {}).get("round_idx") == 0
+        ),
+        0.0,
+    )
+    return initial_draft_ms + first_round_ms
+
+
+def _capture_relevant_environment(
+    env: Mapping[str, str] | None = None,
+) -> dict[str, str]:
+    """Capture the runtime environment that affects orchestrator experiments."""
+    source = env or os.environ
+    prefixes = ("SPECSPLIT_ORCH_", "SPECSPLIT_DRAFT_", "SPECSPLIT_TARGET_")
+    return {
+        key: source[key]
+        for key in sorted(source)
+        if key.startswith(prefixes)
+    }
+
+
+def _default_telemetry_output_path(
+    *,
+    started_at: datetime | None = None,
+    root: str | Path = "telemetry",
+) -> Path:
+    """Return the default timestamped telemetry path for an orchestrator run."""
+    ts = (started_at or datetime.now().astimezone()).strftime("%Y%m%dT%H%M%S.%f%z")
+    return Path(root) / f"orchestrator-run-{ts}.json"
+
+
+def _build_run_report(
+    *,
+    prompt: str,
+    output_text: str,
+    result: PipelineResult,
+    config: OrchestratorConfig,
+    model_name: str,
+    run_id: str,
+    started_at_iso: str,
+    ended_at_iso: str,
+    output_path: str,
+    telemetry_spans: list[dict[str, Any]],
+    telemetry_events: list[dict[str, Any]],
+    worker_metadata: dict[str, dict[str, Any]],
+) -> dict[str, Any]:
+    """Assemble a comprehensive per-run report for offline analysis."""
+    generated_tokens = len(result.output_tokens)
+    sorted_events = sorted(
+        telemetry_events,
+        key=lambda event: event.get("timestamp_ns", 0),
+    )
+    return {
+        "run_id": run_id,
+        "service": "orchestrator",
+        "started_at": started_at_iso,
+        "ended_at": ended_at_iso,
+        "output_path": output_path,
+        "model_name": model_name,
+        "prompt": {
+            "text": prompt,
+            "char_length": len(prompt),
+        },
+        "output": {
+            "text": output_text,
+            "token_count": generated_tokens,
+            "token_ids": list(result.output_tokens),
+        },
+        "summary": {
+            "generated_tokens": generated_tokens,
+            "ttft_ms": round(_ttft_from_telemetry(result.telemetry), 4),
+            "tpot_ms": round(result.wall_time_ms / max(generated_tokens, 1), 4),
+            "average_acceptance_rate": round(result.acceptance_rate, 4),
+            "speculation_hit_rate": round(result.speculation_hit_rate, 4),
+            "total_network_idle_ms": round(result.network_idle_ms, 4),
+            "total_latency_ms": round(result.wall_time_ms, 4),
+            "num_rounds": result.total_rounds,
+        },
+        "effective_config": config.model_dump(),
+        "environment": _capture_relevant_environment(),
+        "worker_metadata": worker_metadata,
+        "per_round_acceptance": list(result.per_round_acceptance),
+        "spans": telemetry_spans,
+        "timeline_events": sorted_events,
+    }
+
+
 class Orchestrator:
     """Manages the speculative decoding pipeline between Draft and Target workers.
 
@@ -116,6 +217,8 @@ class Orchestrator:
         self._draft_worker_vocab_size: int = 0
         self._target_worker_vocab_size: int = 0
         self._workers_probed: bool = False
+        self._last_run_report: dict[str, Any] | None = None
+        self._last_run_started_at: datetime | None = None
 
         logger.info(
             "Orchestrator initialized (draft=%s, target=%s, tokenizer=%s, max_draft=%d, draft_temp=%.2f)",
@@ -191,21 +294,73 @@ class Orchestrator:
         if self._draft_stub is None or self._target_stub is None:
             return
 
+        draft_request_id = f"ping-draft-{uuid.uuid4().hex[:8]}"
+        self._telemetry.record_event(
+            "rpc_request_sent",
+            rpc="Ping",
+            peer="draft",
+            request_id=draft_request_id,
+            timeout_s=self.config.timeout_s,
+        )
         try:
             draft_ping = self._draft_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
             if inspect.isawaitable(draft_ping):
                 draft_ping = await draft_ping
         except Exception as exc:
+            self._telemetry.record_event(
+                "rpc_error",
+                rpc="Ping",
+                peer="draft",
+                request_id=draft_request_id,
+                error=type(exc).__name__,
+                error_details=str(exc),
+            )
             logger.warning("Draft worker metadata probe failed: %s", exc)
             draft_ping = None
+        else:
+            self._telemetry.record_event(
+                "rpc_response_received",
+                rpc="Ping",
+                peer="draft",
+                request_id=draft_request_id,
+                worker_status=getattr(draft_ping, "status", ""),
+                model_name=getattr(draft_ping, "model_name", ""),
+                vocab_size=int(getattr(draft_ping, "vocab_size", 0) or 0),
+            )
 
+        target_request_id = f"ping-target-{uuid.uuid4().hex[:8]}"
+        self._telemetry.record_event(
+            "rpc_request_sent",
+            rpc="Ping",
+            peer="target",
+            request_id=target_request_id,
+            timeout_s=self.config.timeout_s,
+        )
         try:
             target_ping = self._target_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
             if inspect.isawaitable(target_ping):
                 target_ping = await target_ping
         except Exception as exc:
+            self._telemetry.record_event(
+                "rpc_error",
+                rpc="Ping",
+                peer="target",
+                request_id=target_request_id,
+                error=type(exc).__name__,
+                error_details=str(exc),
+            )
             logger.warning("Target worker metadata probe failed: %s", exc)
             target_ping = None
+        else:
+            self._telemetry.record_event(
+                "rpc_response_received",
+                rpc="Ping",
+                peer="target",
+                request_id=target_request_id,
+                worker_status=getattr(target_ping, "status", ""),
+                model_name=getattr(target_ping, "model_name", ""),
+                vocab_size=int(getattr(target_ping, "vocab_size", 0) or 0),
+            )
 
         if draft_ping is not None:
             self._draft_worker_model_name = getattr(draft_ping, "model_name", "") or ""
@@ -278,6 +433,18 @@ class Orchestrator:
             A tuple of (generated output text, PipelineResult with full metrics).
         """
         logger.info("Starting generation for prompt: %r", prompt[:80])
+        self._telemetry.reset()
+        started_at = datetime.now().astimezone()
+        self._last_run_started_at = started_at
+        started_at_iso = started_at.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+        run_id = uuid.uuid4().hex[:12]
+        self._telemetry.record_event(
+            "run_started",
+            run_id=run_id,
+            prompt_char_length=len(prompt),
+            draft_address=self.config.draft_address,
+            target_address=self.config.target_address,
+        )
 
         # Create gRPC channels in the current event loop (grpc.aio channels are
         # loop-bound; creating them from sync code causes "attached to different loop")
@@ -292,10 +459,26 @@ class Orchestrator:
         # Issue 7: Generate unique session ID per request (not "default")
         if session_id is None:
             session_id = uuid.uuid4().hex if self.config.use_target_kv_cache else None
+        self._telemetry.record_event(
+            "prompt_tokenized",
+            run_id=run_id,
+            session_id=session_id or "",
+            prompt_token_count=len(prompt_ids),
+            eos_token_id=eos_token_id,
+        )
+
+        result: PipelineResult | None = None
+        output_text = ""
 
         try:
-            with self._telemetry.span("full_pipeline", prompt_len=len(prompt)):
-                result: PipelineResult = await run_speculative_loop_async(
+            with self._telemetry.span(
+                "full_pipeline",
+                prompt_len=len(prompt),
+                prompt_token_count=len(prompt_ids),
+                run_id=run_id,
+                session_id=session_id or "",
+            ):
+                result = await run_speculative_loop_async(
                     draft_stub=self._draft_stub,
                     target_stub=self._target_stub,
                     prompt_ids=prompt_ids,
@@ -303,6 +486,7 @@ class Orchestrator:
                     session_id=session_id,
                     eos_token_id=eos_token_id,
                     vocab_bridge=self._vocab_bridge,
+                    telemetry=self._telemetry,
                 )
 
                 output_text = tokenizer.decode(
@@ -317,25 +501,91 @@ class Orchestrator:
                     result.acceptance_rate * 100,
                     result.wall_time_ms,
                 )
+                self._telemetry.record_event(
+                    "run_completed",
+                    run_id=run_id,
+                    session_id=session_id or "",
+                    output_token_count=len(result.output_tokens),
+                    total_rounds=result.total_rounds,
+                    acceptance_rate=result.acceptance_rate,
+                    speculation_hit_rate=result.speculation_hit_rate,
+                    wall_time_ms=result.wall_time_ms,
+                    network_idle_ms=result.network_idle_ms,
+                )
         finally:
             # Issue 7: Always clean up the session to prevent KV cache leaks
             if session_id is not None and self._target_stub is not None:
                 try:
                     from specsplit.proto import spec_decoding_pb2
 
+                    request_id = f"end-session-{session_id}"
                     end_req = spec_decoding_pb2.EndSessionRequest(
+                        session_id=session_id,
+                    )
+                    self._telemetry.record_event(
+                        "rpc_request_sent",
+                        rpc="EndSession",
+                        peer="target",
+                        request_id=request_id,
                         session_id=session_id,
                     )
                     end_resp = self._target_stub.EndSession(end_req)
                     if inspect.isawaitable(end_resp):
                         await end_resp
+                    self._telemetry.record_event(
+                        "rpc_response_received",
+                        rpc="EndSession",
+                        peer="target",
+                        request_id=request_id,
+                        session_id=session_id,
+                        was_active=bool(getattr(end_resp, "was_active", False)),
+                    )
                     logger.debug("Session ended: %s", session_id)
-                except Exception:
+                except Exception as exc:
                     # EndSession is best-effort cleanup
+                    self._telemetry.record_event(
+                        "rpc_error",
+                        rpc="EndSession",
+                        peer="target",
+                        request_id=f"end-session-{session_id}",
+                        session_id=session_id,
+                        error=type(exc).__name__,
+                        error_details=str(exc),
+                    )
                     logger.debug(
                         "EndSession cleanup failed (non-critical): session=%s",
                         session_id,
                     )
+
+        if result is not None:
+            ended_at = datetime.now().astimezone()
+            ended_at_iso = ended_at.strftime("%Y-%m-%dT%H:%M:%S.%f%z")
+            worker_metadata = {
+                "draft": {
+                    "address": self.config.draft_address,
+                    "model_name": self._draft_worker_model_name,
+                    "vocab_size": self._draft_worker_vocab_size,
+                },
+                "target": {
+                    "address": self.config.target_address,
+                    "model_name": self._target_worker_model_name,
+                    "vocab_size": self._target_worker_vocab_size,
+                },
+            }
+            self._last_run_report = _build_run_report(
+                prompt=prompt,
+                output_text=output_text,
+                result=result,
+                config=self.config,
+                model_name=self.model_name,
+                run_id=run_id,
+                started_at_iso=started_at_iso,
+                ended_at_iso=ended_at_iso,
+                output_path="",
+                telemetry_spans=[span.to_dict() for span in self._telemetry.spans],
+                telemetry_events=[event.to_dict() for event in self._telemetry.events],
+                worker_metadata=worker_metadata,
+            )
 
         return output_text, result
 
@@ -402,9 +652,28 @@ class Orchestrator:
         self._ensure_tokenizer()
         return ConversationSession(self)
 
-    def export_telemetry(self, path: str) -> None:
-        """Export collected telemetry spans to a JSON file."""
-        self._telemetry.export(path)
+    def export_telemetry(self, path: str | None = None) -> str:
+        """Export the most recent run report to a JSON file."""
+        if self._last_run_report is None:
+            raise RuntimeError("No orchestrator run has completed yet.")
+
+        if path is None:
+            out_path = _default_telemetry_output_path(started_at=self._last_run_started_at)
+        else:
+            candidate = Path(path)
+            if candidate.suffix.lower() == ".json":
+                out_path = candidate
+            else:
+                out_path = candidate / _default_telemetry_output_path(
+                    started_at=self._last_run_started_at,
+                    root=".",
+                ).name
+
+        out_path.parent.mkdir(parents=True, exist_ok=True)
+        report = dict(self._last_run_report)
+        report["output_path"] = str(out_path)
+        out_path.write_text(json.dumps(report, indent=2))
+        return str(out_path)
 
 
 class ConversationSession:
@@ -562,7 +831,7 @@ def main() -> None:
         "--telemetry-output",
         type=str,
         default=None,
-        help="Path to export telemetry JSON",
+        help="Telemetry JSON path or directory. If omitted, a timestamped file is written under telemetry/.",
     )
     parser.add_argument(
         "--use-target-cache",
@@ -698,10 +967,8 @@ def main() -> None:
     print(f"  Acceptance rate:      {result.acceptance_rate * 100:.1f}%")
     print(f"  Speculation hit rate: {result.speculation_hit_rate * 100:.1f}%")
     print(f"  Wall time:            {result.wall_time_ms:.1f} ms")
-
-    if args.telemetry_output:
-        orch.export_telemetry(args.telemetry_output)
-        print(f"\nTelemetry exported to: {args.telemetry_output}")
+    telemetry_path = orch.export_telemetry(args.telemetry_output)
+    print(f"\nTelemetry exported to: {telemetry_path}")
 
 
 if __name__ == "__main__":

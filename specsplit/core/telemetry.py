@@ -7,16 +7,27 @@ for distributed tracing and benchmarking.
 
 from __future__ import annotations
 
+import contextvars
 import json
 import logging
 import time
 import uuid
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 logger = logging.getLogger(__name__)
+_current_context: contextvars.ContextVar[_SpanContext | None] = contextvars.ContextVar(
+    "specsplit_telemetry_context",
+    default=None,
+)
+
+
+def _now_iso() -> str:
+    """Return a timezone-aware wall-clock timestamp with microsecond precision."""
+    return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
 
 # =============================================================================
@@ -92,19 +103,52 @@ class TelemetrySpan:
     """A single telemetry span representing a timed operation."""
 
     span_id: str
+    service: str
     operation: str
     wall_time_ms: float
     metadata: dict[str, Any] = field(default_factory=dict)
-    timestamp_iso: str = field(default_factory=lambda: time.strftime("%Y-%m-%dT%H:%M:%S%z"))
+    start_timestamp_iso: str = field(default_factory=_now_iso)
+    end_timestamp_iso: str = field(default_factory=_now_iso)
+    start_timestamp_ns: int = field(default_factory=time.time_ns)
+    end_timestamp_ns: int = field(default_factory=time.time_ns)
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the span to a dictionary."""
         return {
             "span_id": self.span_id,
+            "service": self.service,
             "operation": self.operation,
             "wall_time_ms": round(self.wall_time_ms, 4),
             "metadata": self.metadata,
+            "timestamp": self.end_timestamp_iso,
+            "timestamp_ns": self.end_timestamp_ns,
+            "start_timestamp": self.start_timestamp_iso,
+            "start_timestamp_ns": self.start_timestamp_ns,
+            "end_timestamp": self.end_timestamp_iso,
+            "end_timestamp_ns": self.end_timestamp_ns,
+        }
+
+
+@dataclass
+class TelemetryEvent:
+    """A point-in-time event for reconstructing request/response timelines."""
+
+    event_id: str
+    service: str
+    event_type: str
+    metadata: dict[str, Any] = field(default_factory=dict)
+    timestamp_iso: str = field(default_factory=_now_iso)
+    timestamp_ns: int = field(default_factory=time.time_ns)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the event to a dictionary."""
+        return {
+            "event_id": self.event_id,
+            "service": self.service,
+            "event_type": self.event_type,
+            "metadata": self.metadata,
             "timestamp": self.timestamp_iso,
+            "timestamp_ns": self.timestamp_ns,
         }
 
 
@@ -125,12 +169,19 @@ class TelemetryLogger:
         tlog.export("telemetry_output.json")
     """
 
-    def __init__(self, service_name: str = "specsplit", max_spans: int = 10_000) -> None:
+    def __init__(
+        self,
+        service_name: str = "specsplit",
+        max_spans: int = 10_000,
+        max_events: int | None = None,
+    ) -> None:
         self.service_name = service_name
         self._max_spans = max_spans
+        self._max_events = max_events if max_events is not None else max_spans * 4
         # Fix D1: Use a bounded deque to prevent unbounded memory growth
         # in long-running gRPC worker processes.
         self._spans: deque[TelemetrySpan] = deque(maxlen=max_spans)
+        self._events: deque[TelemetryEvent] = deque(maxlen=self._max_events)
 
     def span(self, operation: str, **metadata: Any) -> _SpanContext:
         """Create a timed span context manager.
@@ -154,10 +205,27 @@ class TelemetryLogger:
             span.wall_time_ms,
         )
 
+    def record_event(self, event_type: str, **metadata: Any) -> TelemetryEvent:
+        """Record a point-in-time event."""
+        event = TelemetryEvent(
+            event_id=uuid.uuid4().hex[:16],
+            service=self.service_name,
+            event_type=event_type,
+            metadata=metadata,
+        )
+        self._events.append(event)
+        logger.debug("Event [%s] %s", event.event_id[:8], event.event_type)
+        return event
+
     @property
     def spans(self) -> list[TelemetrySpan]:
         """Return a copy of all recorded spans."""
         return list(self._spans)
+
+    @property
+    def events(self) -> list[TelemetryEvent]:
+        """Return a copy of all recorded events."""
+        return list(self._events)
 
     def export(self, path: str | Path) -> None:
         """Export all recorded spans to a JSON file.
@@ -171,20 +239,28 @@ class TelemetryLogger:
         payload = {
             "service": self.service_name,
             "num_spans": len(self._spans),
+            "num_events": len(self._events),
             "spans": [s.to_dict() for s in self._spans],
+            "events": [e.to_dict() for e in self._events],
         }
         out.write_text(json.dumps(payload, indent=2))
-        logger.info("Exported %d spans to %s", len(self._spans), out)
+        logger.info(
+            "Exported %d spans and %d events to %s",
+            len(self._spans),
+            len(self._events),
+            out,
+        )
 
     def export_csv(self, path: str | Path) -> None:
         """Export all recorded spans to a CSV file."""
         import csv
+
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
         if not self._spans:
             logger.info("No spans to export to CSV.")
             return
-        
+
         # Collect all unique metadata keys
         metadata_keys = set()
         for span in self._spans:
@@ -201,7 +277,7 @@ class TelemetryLogger:
                     "span_id": span.span_id,
                     "operation": span.operation,
                     "wall_time_ms": round(span.wall_time_ms, 4),
-                    "timestamp": span.timestamp_iso,
+                    "timestamp": span.end_timestamp_iso,
                 }
                 for k in metadata_headers:
                     row[k] = span.metadata.get(k, "")
@@ -212,27 +288,33 @@ class TelemetryLogger:
         """Export all recorded spans to a Prometheus text-based format."""
         out = Path(path)
         out.parent.mkdir(parents=True, exist_ok=True)
-        
+
         lines = [
             "# HELP specsplit_operation_duration_ms Duration of operations in milliseconds",
             "# TYPE specsplit_operation_duration_ms summary"
         ]
-        
+
         for span in self._spans:
             labels = [f'operation="{span.operation}"', f'service="{self.service_name}"']
             for k, v in span.metadata.items():
                 if isinstance(v, (int, float, str, bool)):
                     labels.append(f'{k}="{v}"')
-            
+
             label_str = ",".join(labels)
             lines.append(f'specsplit_operation_duration_ms{{{label_str}}} {span.wall_time_ms:.4f}')
-        
+
         out.write_text("\n".join(lines) + "\n")
         logger.info("Exported %d spans (Prometheus) to %s", len(self._spans), out)
 
     def reset(self) -> None:
         """Clear all recorded spans."""
         self._spans = deque(maxlen=self._max_spans)
+        self._events = deque(maxlen=self._max_events)
+
+
+def get_current_context() -> _SpanContext | None:
+    """Return the current telemetry span context, if any."""
+    return _current_context.get()
 
 
 class _SpanContext:
@@ -249,19 +331,39 @@ class _SpanContext:
         self.metadata = metadata
         self._sw = Stopwatch()
         self.span_id = uuid.uuid4().hex[:16]
+        self._context_token: contextvars.Token[_SpanContext | None] | None = None
+        self._start_timestamp_iso: str = ""
+        self._start_timestamp_ns: int = 0
 
     def __enter__(self) -> _SpanContext:
         """Start timing and return the span context."""
+        self._start_timestamp_ns = time.time_ns()
+        self._start_timestamp_iso = _now_iso()
+        self._context_token = _current_context.set(self)
         self._sw.start()
         return self
 
     def __exit__(self, *_: Any) -> None:
         """Stop timing and record the span."""
         self._sw.stop()
+        end_timestamp_ns = time.time_ns()
+        end_timestamp_iso = _now_iso()
         span = TelemetrySpan(
             span_id=self.span_id,
+            service=self._logger.service_name,
             operation=self._operation,
             wall_time_ms=self._sw.elapsed_ms,
             metadata=self.metadata,
+            start_timestamp_iso=self._start_timestamp_iso,
+            end_timestamp_iso=end_timestamp_iso,
+            start_timestamp_ns=self._start_timestamp_ns,
+            end_timestamp_ns=end_timestamp_ns,
         )
         self._logger.record_span(span)
+        if self._context_token is not None:
+            _current_context.reset(self._context_token)
+
+    @property
+    def elapsed_ms(self) -> float:
+        """Expose the span wall time for callers inside nested instrumentation."""
+        return self._sw.elapsed_ms

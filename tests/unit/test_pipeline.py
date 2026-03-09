@@ -425,3 +425,75 @@ class TestAcceptanceRate:
         # acceptance = 2 accepted / 3 path_depth ≈ 0.667 (NOT 2/total_tree_nodes)
         assert abs(result.acceptance_rate - 2.0 / 3.0) < 0.01
 
+
+class TestTimelineEvents:
+    """Verify that the pipeline emits reconstructable RPC timeline events."""
+
+    def test_pipeline_records_rpc_send_and_receive_events(self) -> None:
+        """Each run should log request/response boundaries with worker telemetry."""
+        draft_resp = _make_draft_response([10, 20])
+        draft_resp.telemetry.span_id = "draft-span"
+        draft_resp.telemetry.wall_time_ms = 7.5
+        draft_resp.telemetry.model_time_ms = 6.0
+        draft_resp.telemetry.tokens_processed = 2
+        draft_resp.telemetry.device = "cuda:0"
+
+        verify_resp = _make_verify_response(
+            accepted_ids=[10],
+            correction=55,
+            num_accepted=1,
+        )
+        verify_resp.telemetry.span_id = "verify-span"
+        verify_resp.telemetry.wall_time_ms = 11.0
+        verify_resp.telemetry.model_time_ms = 9.0
+        verify_resp.telemetry.tokens_processed = 2
+        verify_resp.telemetry.device = "cuda:1"
+
+        draft_stub = _FakeStub([draft_resp] * 3)
+        target_stub = _FakeStub([verify_resp])
+        cfg = OrchestratorConfig(max_rounds=1, max_output_tokens=100, max_draft_tokens=2)
+
+        result = asyncio.run(
+            run_speculative_loop_async(
+                draft_stub=draft_stub,
+                target_stub=target_stub,
+                prompt_ids=[1],
+                config=cfg,
+                session_id="timeline-session",
+            )
+        )
+
+        assert result.timeline_events
+        assert result.timeline_events == sorted(
+            result.timeline_events,
+            key=lambda event: event["timestamp_ns"],
+        )
+
+        send_events = [
+            event
+            for event in result.timeline_events
+            if event["event_type"] == "rpc_request_sent"
+        ]
+        receive_events = [
+            event
+            for event in result.timeline_events
+            if event["event_type"] == "rpc_response_received"
+        ]
+
+        assert any(
+            event["metadata"]["rpc"] == "GenerateDrafts"
+            and event["metadata"]["peer"] == "draft"
+            and event["metadata"]["round_idx"] == 0
+            and event["metadata"]["context_token_count"] == 1
+            for event in send_events
+        )
+
+        verify_receive = next(
+            event
+            for event in receive_events
+            if event["metadata"]["rpc"] == "VerifyDrafts"
+        )
+        assert verify_receive["metadata"]["peer"] == "target"
+        assert verify_receive["metadata"]["accepted_token_count"] == 1
+        assert verify_receive["metadata"]["worker_telemetry"]["wall_time_ms"] == 11.0
+        assert verify_receive["metadata"]["worker_telemetry"]["device"] == "cuda:1"
