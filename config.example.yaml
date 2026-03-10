@@ -1,0 +1,47 @@
+# SpecSplit Configuration
+# =====================================================================
+# All values here serve as defaults. They can be overridden by:
+#   - Environment variables (SPECSPLIT_ORCH_*, SPECSPLIT_DRAFT_*, SPECSPLIT_TARGET_*)
+#   - CLI arguments (--max-rounds, --max-output-tokens, --model-name, etc.)
+#
+# Usage:
+#   python -m specsplit.workers.orchestrator.client \
+#       --config config.example.yaml \
+#       --prompt "Explain quantum computing"
+# =====================================================================
+
+orchestrator:
+  # gRPC addresses of the workers
+  draft_address: "localhost:50051"
+  target_address: "localhost:50052"
+
+  # Generation limits
+  max_rounds: 50
+  max_output_tokens: 1024
+  max_draft_tokens: 5
+
+  # Tokenizer (MUST match draft/target model family)
+  tokenizer_model: "Qwen/Qwen2.5-7B-Instruct"
+
+  # Per-RPC timeout
+  timeout_s: 120.0
+
+  # Enable session-based KV caching on the target worker
+  use_target_kv_cache: false
+
+  # Synthetic latency injection for benchmarking (milliseconds)
+  simulated_rtt_ms: 0.0
+
+draft:
+  model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+  device: "cuda:0"
+  max_draft_tokens: 5
+  num_beams: 1
+  temperature: 0.0
+  grpc_port: 50051
+
+target:
+  model_name: "Qwen/Qwen2.5-7B-Instruct"
+  device: "cuda:0"
+  grpc_port: 50052
+  max_sessions: 16

@@ -43,10 +43,10 @@ class TestTelemetryLogger:
         """Spans should be recorded with correct metadata."""
         tlog = TelemetryLogger(service_name="test-service")
 
-        with tlog.span("test_op", key="value") as span_id:
+        with tlog.span("test_op", key="value") as ctx:
             time.sleep(0.005)
-            assert isinstance(span_id, str)
-            assert len(span_id) == 16  # hex UUID prefix
+            assert isinstance(ctx.span_id, str)
+            assert len(ctx.span_id) == 16  # hex UUID prefix
 
         assert len(tlog.spans) == 1
         span = tlog.spans[0]
@@ -80,6 +80,30 @@ class TestTelemetryLogger:
         assert data["spans"][0]["operation"] == "sample_op"
         assert data["spans"][0]["metadata"]["tokens"] == 42
 
+    def test_event_recording_and_export(self, tmp_path: Path):
+        """Events should be exported alongside spans for timeline reconstruction."""
+        tlog = TelemetryLogger(service_name="timeline-test")
+
+        event = tlog.record_event(
+            "rpc_request_sent",
+            rpc="GenerateDrafts",
+            request_id="draft-123",
+            peer="draft",
+        )
+
+        assert event.event_type == "rpc_request_sent"
+        assert event.metadata["request_id"] == "draft-123"
+
+        out_file = tmp_path / "timeline.json"
+        tlog.export(out_file)
+
+        data = json.loads(out_file.read_text())
+        assert data["service"] == "timeline-test"
+        assert data["num_events"] == 1
+        assert data["events"][0]["event_type"] == "rpc_request_sent"
+        assert data["events"][0]["metadata"]["rpc"] == "GenerateDrafts"
+        assert "timestamp_ns" in data["events"][0]
+
     def test_reset(self):
         """Reset should clear all recorded spans."""
         tlog = TelemetryLogger()
@@ -88,3 +112,4 @@ class TestTelemetryLogger:
         assert len(tlog.spans) == 1
         tlog.reset()
         assert len(tlog.spans) == 0
+        assert len(tlog.events) == 0

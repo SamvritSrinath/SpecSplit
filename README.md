@@ -193,7 +193,7 @@ Pydantic defaults.
 
 ```bash
 # Start the Target Worker (large model, expensive GPU)
-SPECSPLIT_TARGET_MODEL_NAME=meta-llama/Llama-3-70B \
+SPECSPLIT_TARGET_MODEL_NAME=meta-llama/Llama-3.1-70B \
 SPECSPLIT_TARGET_GRPC_PORT=50052 \
     python -m specsplit.workers.target.service
 ```
@@ -202,7 +202,7 @@ SPECSPLIT_TARGET_GRPC_PORT=50052 \
 
 ```bash
 # Start the Draft Worker (small model, cheap GPU)
-SPECSPLIT_DRAFT_MODEL_NAME=Qwen/Qwen2.5-0.5B \
+SPECSPLIT_DRAFT_MODEL_NAME=meta-llama/Llama-3.1-8B \
 SPECSPLIT_DRAFT_GRPC_PORT=50051 \
 SPECSPLIT_DRAFT_MAX_DRAFT_TOKENS=5 \
     python -m specsplit.workers.draft.service
@@ -216,9 +216,41 @@ SPECSPLIT_ORCH_DRAFT_ADDRESS=localhost:50051 \
 SPECSPLIT_ORCH_TARGET_ADDRESS=localhost:50052 \
     python -m specsplit.workers.orchestrator.client \
         --prompt "Explain the key ideas behind quantum computing." \
-        --max-rounds 20 \
-        --telemetry-output telemetry_spans.json
+        --max-rounds 20
 ```
+
+### Starting Target/Draft as Services
+We use `ngrok` to expose `localhost` ports to the internet to perform experimentation. After installing `ngrok`, refer to `scripts/remote_worker.<draft/target>.env.example` to create an environment for the workers. Name the envrionment as `specsplit-<target/draft>.env` and place it in a known directory on the server.
+
+To start the target/draft worker without interrupt:
+```bash
+scripts/manage_remote_worker.sh start <path_to_env>
+exit
+```
+
+And to manage the remote worker:
+```bash
+scripts/manage_remote_worker.sh status <path_to_env>
+scripts/manage_remote_worker.sh logs   <path_to_env>
+scripts/manage_remote_worker.sh stop   <path_to_env>
+scripts/manage_remote_worker.sh update <path_to_env>
+```
+
+Each orchestrator run now writes a timestamped telemetry artifact under
+`telemetry/` by default, for example
+`telemetry/orchestrator-run-20260308T101112.123456-0800.json`. The artifact
+includes:
+
+- the benchmark-style summary metrics previously surfaced by the gamma sweep
+  harness (`ttft_ms`, `tpot_ms`, acceptance, network idle, total latency, rounds)
+- the effective orchestrator configuration and the relevant `SPECSPLIT_*`
+  environment variables used for the run
+- a detailed timeline of orchestrator-visible RPC send/receive/error events for
+  Draft, Target, `Ping`, and `EndSession`, including worker telemetry returned
+  in responses
+
+Use `--telemetry-output` to override the destination. Pass either a JSON file
+path or a directory; directories receive a timestamped run file automatically.
 
 > **Note:** For local testing without GPUs, use CPU mode by setting
 > `SPECSPLIT_DRAFT_DEVICE=cpu` and `SPECSPLIT_TARGET_DEVICE=cpu`. CPU mode is

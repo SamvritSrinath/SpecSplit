@@ -2,12 +2,24 @@
 
 from __future__ import annotations
 
+import json
 from unittest.mock import MagicMock, patch
 
 import torch
 
 from specsplit.core.config import DraftWorkerConfig
 from specsplit.workers.draft.engine import DraftEngine, TokenNode
+
+
+def _cache_seq_len(past_key_values) -> int:
+    """Return sequence length from either a legacy tuple or HF cache object."""
+    if past_key_values is None:
+        return 0
+    if isinstance(past_key_values, tuple):
+        return past_key_values[0][0].shape[2]
+    if hasattr(past_key_values, "get_seq_length"):
+        return past_key_values.get_seq_length()
+    raise TypeError(f"Unsupported cache type in test helper: {type(past_key_values)!r}")
 
 
 def _make_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> MagicMock:
@@ -21,18 +33,21 @@ def _make_mock_model(vocab_size: int = 50, deterministic_token: int = 42) -> Mag
     model.dtype = torch.float16
     model.to.return_value = model
     model.eval.return_value = model
+    model.config = MagicMock()
+    model.config.vocab_size = vocab_size
 
     def fake_forward(input_ids, past_key_values=None, use_cache=True, **kwargs):
         batch, seq_len = input_ids.shape
         logits = torch.zeros(batch, seq_len, vocab_size)
         logits[:, :, deterministic_token] = 10.0  # argmax → deterministic_token
 
-        # Fake KV cache: 2 layers
+        # Fake KV cache: 2 layers, batch size must match input for batched beam slicing
         cache_len = seq_len
         if past_key_values is not None:
-            cache_len += past_key_values[0][0].shape[2]
+            cache_len += _cache_seq_len(past_key_values)
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -50,6 +65,7 @@ def _make_mock_tokenizer() -> MagicMock:
     tokenizer = MagicMock()
     tokenizer.pad_token = "<pad>"
     tokenizer.eos_token = "<eos>"
+    tokenizer.__len__.return_value = 50
     return tokenizer
 
 
@@ -66,6 +82,8 @@ def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 4
     model.dtype = torch.float16
     model.to.return_value = model
     model.eval.return_value = model
+    model.config = MagicMock()
+    model.config.vocab_size = vocab_size
 
     def fake_forward(input_ids, past_key_values=None, use_cache=True, **kwargs):
         call_log.append(past_key_values)
@@ -75,9 +93,10 @@ def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 4
 
         cache_len = seq_len
         if past_key_values is not None:
-            cache_len += past_key_values[0][0].shape[2]
+            cache_len += _cache_seq_len(past_key_values)
         fake_kv = tuple(
-            (torch.zeros(1, 4, cache_len, 8), torch.zeros(1, 4, cache_len, 8)) for _ in range(2)
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
         )
 
         out = MagicMock()
@@ -89,6 +108,63 @@ def _make_tracking_mock_model(vocab_size: int = 50, deterministic_token: int = 4
     model.side_effect = fake_forward
     model.__call__ = fake_forward
     return model
+
+
+def _make_dynamic_cache_required_mock_model(
+    vocab_size: int = 50,
+    deterministic_token: int = 42,
+) -> MagicMock:
+    """Mock model that rejects legacy tuple caches like current Llama does."""
+    model = MagicMock()
+    model.dtype = torch.float16
+    model.to.return_value = model
+    model.eval.return_value = model
+    model.config = MagicMock()
+    model.config.vocab_size = vocab_size
+
+    def fake_forward(input_ids, past_key_values=None, use_cache=True, **kwargs):
+        if past_key_values is not None and isinstance(past_key_values, tuple):
+            raise AttributeError("'tuple' object has no attribute 'get_seq_length'")
+
+        batch, seq_len = input_ids.shape
+        logits = torch.zeros(batch, seq_len, vocab_size)
+        logits[:, :, deterministic_token] = 10.0
+
+        cache_len = seq_len
+        if past_key_values is not None and hasattr(past_key_values, "get_seq_length"):
+            cache_len += past_key_values.get_seq_length()
+
+        fake_kv = tuple(
+            (torch.zeros(batch, 4, cache_len, 8), torch.zeros(batch, 4, cache_len, 8))
+            for _ in range(2)
+        )
+
+        out = MagicMock()
+        out.logits = logits
+        out.past_key_values = fake_kv
+        return out
+
+    model.side_effect = fake_forward
+    model.__call__ = fake_forward
+    return model
+
+
+def _write_llama_checkpoint_config(
+    checkpoint_dir,
+    *,
+    torch_dtype: str = "bfloat16",
+) -> None:
+    """Write a minimal local config.json matching the local Llama checkpoints."""
+    (checkpoint_dir / "config.json").write_text(
+        json.dumps(
+            {
+                "architectures": ["LlamaForCausalLM"],
+                "model_type": "llama",
+                "torch_dtype": torch_dtype,
+                "vocab_size": 128256,
+            }
+        )
+    )
 
 
 class TestDraftEngine:
@@ -118,6 +194,33 @@ class TestDraftEngine:
         assert engine.is_loaded
         mock_model_cls.assert_called_once()
         mock_tokenizer_cls.assert_called_once_with(draft_config.model_name)
+
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_load_model_uses_checkpoint_dtype_from_local_llama_config(
+        self,
+        mock_causal_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        tmp_path,
+    ) -> None:
+        """Local Llama checkpoints should load with their configured dtype."""
+        checkpoint_dir = tmp_path / "Llama-3.1-8B"
+        checkpoint_dir.mkdir()
+        _write_llama_checkpoint_config(checkpoint_dir)
+
+        mock_causal_cls.return_value = _make_mock_model()
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        config = DraftWorkerConfig(model_name=str(checkpoint_dir), device="cpu")
+        engine = DraftEngine(config=config)
+        engine.load_model()
+
+        assert engine.is_loaded
+        mock_causal_cls.assert_called_once_with(
+            str(checkpoint_dir),
+            low_cpu_mem_usage=True,
+            dtype=torch.bfloat16,
+        )
 
     @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
@@ -188,6 +291,31 @@ class TestDraftEngine:
         assert len(chain_ids) == 4
         assert all(tid == target_token for tid in chain_ids)
 
+    @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
+    @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
+    def test_generate_draft_tree_converts_batched_legacy_cache_for_llama(
+        self,
+        mock_model_cls: MagicMock,
+        mock_tokenizer_cls: MagicMock,
+        draft_config: DraftWorkerConfig,
+    ) -> None:
+        """Batched draft expansion must convert legacy tuples back to DynamicCache."""
+        mock_model_cls.return_value = _make_dynamic_cache_required_mock_model(deterministic_token=7)
+        mock_tokenizer_cls.return_value = _make_mock_tokenizer()
+
+        engine = DraftEngine(config=draft_config)
+        engine.load_model()
+
+        roots = engine.generate_draft_tree(
+            prompt_ids=[1, 2, 3],
+            k=2,
+            num_beams=1,
+            temperature=0.0,
+        )
+
+        assert len(roots) == 1
+        assert roots[0].token_id == 7
+
     def test_to_dict_serialization(self, draft_config: DraftWorkerConfig) -> None:
         """TokenNode.to_dict() should produce a serializable structure."""
         node = TokenNode(
@@ -223,15 +351,16 @@ class TestDraftEngineKVCache:
         engine = DraftEngine(config=draft_config)
         engine.load_model()
 
-        assert engine._kv_cache is None
-        assert engine._cached_prompt_len == 0
-        assert engine._cached_last_logits is None
+        assert engine._default_cache.kv_cache is None
+        assert engine._default_cache.cached_prompt_len == 0
+        assert engine._default_cache.cached_last_logits is None
 
         engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
 
-        assert engine._kv_cache is not None
-        assert engine._cached_prompt_len == 3
-        assert engine._cached_last_logits is not None
+        assert engine._default_cache.kv_cache is not None
+        assert engine._default_cache.cached_prompt_len == 3
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3]
+        assert engine._default_cache.cached_last_logits is not None
 
     @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
@@ -259,7 +388,8 @@ class TestDraftEngineKVCache:
 
         assert null_kv_after_round1 == 1  # Round 1 did one full prefix recompute
         assert null_kv_after_round2 == 1  # Round 2 added no from-scratch calls
-        assert engine._cached_prompt_len == 5
+        assert engine._default_cache.cached_prompt_len == 5
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3, 42, 42]
 
     @patch("specsplit.workers.draft.engine.AutoTokenizer.from_pretrained")
     @patch("specsplit.workers.draft.engine.AutoModelForCausalLM.from_pretrained")
@@ -304,12 +434,14 @@ class TestDraftEngineKVCache:
         engine.load_model()
 
         engine.generate_draft_tree(prompt_ids=[1, 2, 3], k=2, num_beams=1)
-        assert engine._kv_cache is not None
-        assert engine._cached_prompt_len == 3
-        assert engine._cached_last_logits is not None
+        assert engine._default_cache.kv_cache is not None
+        assert engine._default_cache.cached_prompt_len == 3
+        assert engine._default_cache.cached_prompt_ids == [1, 2, 3]
+        assert engine._default_cache.cached_last_logits is not None
 
         engine.reset_cache()
 
-        assert engine._kv_cache is None
-        assert engine._cached_prompt_len == 0
-        assert engine._cached_last_logits is None
+        assert engine._default_cache.kv_cache is None
+        assert engine._default_cache.cached_prompt_len == 0
+        assert engine._default_cache.cached_prompt_ids == []
+        assert engine._default_cache.cached_last_logits is None

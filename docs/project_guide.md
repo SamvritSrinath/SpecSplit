@@ -94,7 +94,7 @@ Override any default via the environment:
 ### 1. Start the Target Worker
 
 ```bash
-SPECSPLIT_TARGET_MODEL_NAME=Qwen/Qwen2.5-0.5B \
+SPECSPLIT_TARGET_MODEL_NAME=meta-llama/Llama-3.1-70B \
 SPECSPLIT_TARGET_DEVICE=cuda:0 \
     python -m specsplit.workers.target.service
 ```
@@ -102,7 +102,7 @@ SPECSPLIT_TARGET_DEVICE=cuda:0 \
 ### 2. Start the Draft Worker
 
 ```bash
-SPECSPLIT_DRAFT_MODEL_NAME=Qwen/Qwen2.5-0.5B \
+SPECSPLIT_DRAFT_MODEL_NAME=meta-llama/Llama-3.1-8B \
 SPECSPLIT_DRAFT_DEVICE=cuda:1 \
     python -m specsplit.workers.draft.service
 ```
