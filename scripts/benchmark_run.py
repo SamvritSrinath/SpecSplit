@@ -1,4 +1,7 @@
-"""SpecSplit Benchmark Runner — load-test the orchestrator and log granular metrics.
+"""[Legacy] SpecSplit Benchmark Runner — load-test the orchestrator and log granular metrics.
+
+Preferred entrypoint for new runs:
+    python3 benchmarks/runner.py
 
 Reads a JSONL file of prompts (e.g. a ShareGPT slice), drives the SpecSplit
 orchestrator for each prompt, and records per-request metrics to CSV. Supports
