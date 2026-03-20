@@ -66,9 +66,7 @@ class _RpcResult(Generic[T]):
     elapsed_ms: float
 
 
-# ============================================================================
 # Data Classes
-# ============================================================================
 
 
 @dataclass
@@ -110,6 +108,8 @@ class VerificationResult:
 
 @dataclass
 class PIDState:
+    """PID-style controller state used to tune speculative behavior."""
+
     integral: float = 0.0
     prev_error: float = 0.0
     kp: float = 2.0
@@ -157,7 +157,7 @@ class SpeculativeState:
     total_rpc_time_ms: float = 0.0
     per_round_metrics: list[RoundMetrics] = field(default_factory=list)
     is_finished: bool = False
-    
+
     # PR-7 / PR-8: Adaptive K and Fallback Mode State
     current_k: int = 0  # Initialized from config.max_draft_tokens
     recent_acceptance_rates: deque[float] = field(default_factory=lambda: deque(maxlen=5))
@@ -190,9 +190,7 @@ class PipelineResult:
     timeline_events: list[dict[str, Any]] = field(default_factory=list)
 
 
-# ============================================================================
 # Protobuf ↔ DraftTree Conversion Helpers
-# ============================================================================
 
 
 def _flatten_proto_tree(proto_nodes: list[Any]) -> tuple[list[int], list[int]]:
@@ -345,7 +343,7 @@ def _get_longest_path(draft: DraftTree) -> list[int]:
         if len(path) > len(best_path):
             best_path = path
         for c in children.get(node, []):
-            stack.append((c, path + [draft.token_ids[c]]))
+            stack.append((c, [*path, draft.token_ids[c]]))
 
     return best_path
 
@@ -385,9 +383,7 @@ def _record_rpc_event(
     )
 
 
-# ============================================================================
 # Async gRPC Stub Wrappers — Real gRPC calls
-# ============================================================================
 
 
 async def _call_generate_drafts(
@@ -559,11 +555,11 @@ async def _call_verify_drafts(
     target_context_ids = context_ids
     target_new_token_ids = new_token_ids or []
     target_expected_prefix_length = expected_prefix_length
-    
+
     # We omit translating draft_tree.proto_nodes as that would require mutating
     # the protobuf tree deeply. The VocabBridge primarily handles linear sequences.
     # To fully support heterogeneous trees, _arrays_to_proto_nodes should use it.
-    
+
     request = spec_decoding_pb2.VerifyRequest(
         request_id=f"verify-{draft_tree.round_idx}-{uuid.uuid4().hex[:8]}",
         prompt_token_ids=target_context_ids,
@@ -720,9 +716,7 @@ async def _call_flush_target_cache(
         logger.debug("Cache flush failed (non-critical): session=%s", session_id)
 
 
-# ============================================================================
 # Core: Overlapped Async Speculative Loop
-# ============================================================================
 
 
 async def run_speculative_loop_async(
@@ -831,8 +825,11 @@ async def run_speculative_loop_async(
                 )
                 pipeline_sw.stop()
                 return PipelineResult(
-                    output_tokens=[], total_rounds=0, acceptance_rate=0.0,
-                    speculation_hit_rate=0.0, wall_time_ms=pipeline_sw.elapsed_ms,
+                    output_tokens=[],
+                    total_rounds=0,
+                    acceptance_rate=0.0,
+                    speculation_hit_rate=0.0,
+                    wall_time_ms=pipeline_sw.elapsed_ms,
                     telemetry=[s.to_dict() for s in telemetry.spans],
                     timeline_events=sorted(
                         (e.to_dict() for e in telemetry.events),
@@ -924,10 +921,14 @@ async def run_speculative_loop_async(
         # Speculatively draft N+1 while N is being verified.
         # Skip draft RPC if path ends at EOS (nothing useful to speculate).
         if eos_token_id is not None and assumed_path and assumed_path[-1] == eos_token_id:
-            async def _noop_draft() -> _RpcResult[DraftTree]:
+
+            async def _noop_draft(round_idx_for_closure: int = round_idx) -> _RpcResult[DraftTree]:
                 return _RpcResult(
                     value=DraftTree(
-                        token_ids=[], topology_map=[], proto_nodes=[], round_idx=round_idx + 1
+                        token_ids=[],
+                        topology_map=[],
+                        proto_nodes=[],
+                        round_idx=round_idx_for_closure + 1,
                     ),
                     elapsed_ms=0.0,
                 )
@@ -988,10 +989,10 @@ async def run_speculative_loop_async(
                 # PR-4 Fix: The python TargetEngine raises CacheDesyncError,
                 # which gRPC translates to StatusCode.UNKNOWN. We must check
                 # both that or FAILED_PRECONDITION depending on interceptors.
-                if (
-                    e.code() in (grpc.StatusCode.FAILED_PRECONDITION, grpc.StatusCode.UNKNOWN)
-                    and "CACHE_EVICTED_DELTA_ONLY" in (e.details() or "")
-                ):
+                if e.code() in (
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    grpc.StatusCode.UNKNOWN,
+                ) and "CACHE_EVICTED_DELTA_ONLY" in (e.details() or ""):
                     logger.warning(
                         "Target cache evicted for session %s at round %d. "
                         "Retrying verify with full context.",
@@ -1053,8 +1054,7 @@ async def run_speculative_loop_async(
             # Issue 16: For overlapped RPCs, the wall-clock wait time is the max, not the sum.
             # elapsed_ms already includes simulated_rtt (sleep is inside RPC stopwatch).
             actual_wait_ms = max(
-                verify_rpc_result.elapsed_ms,
-                speculative_draft_rpc_result.elapsed_ms
+                verify_rpc_result.elapsed_ms, speculative_draft_rpc_result.elapsed_ms
             )
             state.total_rpc_time_ms += actual_wait_ms
 
@@ -1062,10 +1062,14 @@ async def run_speculative_loop_async(
             ctx.metadata["verify_rpc_ms"] = verify_rpc_result.elapsed_ms
             ctx.metadata["draft_rpc_ms"] = speculative_draft_rpc_result.elapsed_ms
             ctx.metadata["overlap_savings_ms"] = (
-                verify_rpc_result.elapsed_ms + speculative_draft_rpc_result.elapsed_ms - actual_wait_ms
+                verify_rpc_result.elapsed_ms
+                + speculative_draft_rpc_result.elapsed_ms
+                - actual_wait_ms
             )
             # Simple approximation of payload serialization size
-            ctx.metadata["payload_bytes"] = len(current_draft.token_ids) * 8 + len(current_context) * 4
+            ctx.metadata["payload_bytes"] = (
+                len(current_draft.token_ids) * 8 + len(current_context) * 4
+            )
             ctx.metadata["rtt_ms_measured"] = actual_wait_ms
             ctx.metadata["k_pid_error"] = state.pid.prev_error
             ctx.metadata["k_pid_integral"] = state.pid.integral
@@ -1082,9 +1086,7 @@ async def run_speculative_loop_async(
         state.total_accepted += verify_result.accepted_length
 
         # Issue 14: Record per-round acceptance metrics
-        round_acc = (
-            verify_result.accepted_length / path_depth if path_depth > 0 else 0.0
-        )
+        round_acc = verify_result.accepted_length / path_depth if path_depth > 0 else 0.0
         state.per_round_metrics.append(
             RoundMetrics(
                 round_idx=round_idx,
@@ -1094,7 +1096,7 @@ async def run_speculative_loop_async(
                 acceptance_rate=round_acc,
             )
         )
-        
+
         # Update rolling acceptance rate queue
         state.recent_acceptance_rates.append(round_acc)
         rolling_mean = sum(state.recent_acceptance_rates) / len(state.recent_acceptance_rates)
@@ -1102,7 +1104,7 @@ async def run_speculative_loop_async(
         # Calculate dynamic fallback threshold (roughly alpha * 0.8)
         # alpha is breakeven rate: proxy with actual measured RTT
         measured_rtt = actual_wait_ms
-        t_target_approx = 15.0 # Rough approximation of target forward pass
+        t_target_approx = 15.0  # Rough approximation of target forward pass
         breakeven_alpha = measured_rtt / t_target_approx if measured_rtt > 0 else 0.5
         fallback_threshold = min(0.5, breakeven_alpha * 0.8)
 
@@ -1114,12 +1116,18 @@ async def run_speculative_loop_async(
                 state.consecutive_low_acceptance += 1
                 if state.consecutive_low_acceptance >= 2:
                     if not state.is_fallback_mode:
-                        logger.warning("Acceptance rate collapsed (%.2f < %.2f). Entering Fallback Mode.", rolling_mean, fallback_threshold)
+                        logger.warning(
+                            "Acceptance rate collapsed (%.2f < %.2f). Entering Fallback Mode.",
+                            rolling_mean,
+                            fallback_threshold,
+                        )
                     state.is_fallback_mode = True
             else:
                 state.consecutive_low_acceptance = 0
                 if state.is_fallback_mode and rolling_mean > fallback_threshold + 0.1:
-                    logger.info("Acceptance rate recovered (%.2f). Exiting Fallback Mode.", rolling_mean)
+                    logger.info(
+                        "Acceptance rate recovered (%.2f). Exiting Fallback Mode.", rolling_mean
+                    )
                     state.is_fallback_mode = False
 
             # PR-7: Adaptive K using PID
@@ -1128,20 +1136,26 @@ async def run_speculative_loop_async(
                 state.pid.integral += error
                 state.pid.integral = max(-10.0, min(10.0, state.pid.integral))
                 derivative = error - state.pid.prev_error
-                
+
                 adjustment = (
-                    state.pid.kp * error +
-                    state.pid.ki * state.pid.integral +
-                    state.pid.kd * derivative
+                    state.pid.kp * error
+                    + state.pid.ki * state.pid.integral
+                    + state.pid.kd * derivative
                 )
                 state.pid.prev_error = error
-                
+
                 # Apply adjustment
-                new_k = int(round(state.current_k + adjustment))
+                new_k = round(state.current_k + adjustment)
                 new_k = max(1, min(new_k, cfg.max_draft_tokens))
-                
+
                 if new_k != state.current_k:
-                    logger.debug("PID adjusted K: %d -> %d (err=%.2f, adj=%.2f)", state.current_k, new_k, error, adjustment)
+                    logger.debug(
+                        "PID adjusted K: %d -> %d (err=%.2f, adj=%.2f)",
+                        state.current_k,
+                        new_k,
+                        error,
+                        adjustment,
+                    )
                     state.current_k = new_k
 
         # Append accepted tokens and bonus token to output
@@ -1161,10 +1175,10 @@ async def run_speculative_loop_async(
         state.generated_tokens.extend(new_tokens)
         # Context for next round is only verified output (never speculative draft).
         current_context = list(prompt_ids) + state.generated_tokens
-        
+
         # Issue 11 & PR-2 Fix: Update verified_context_len for delta-only transmission.
         # The target's seq_len ONLY includes the accepted tokens, NOT the bonus token
-        # (which is sent to the target as a delta in the NEXT round). So we must align 
+        # (which is sent to the target as a delta in the NEXT round). So we must align
         # expected_prefix_length to maintain perfect sync with the Target KV Cache.
         bonus_count = 1 if verify_result.bonus_token is not None else 0
         verified_context_len = len(current_context) - bonus_count
@@ -1226,9 +1240,7 @@ async def run_speculative_loop_async(
         if path_matches and speculative_draft is not None and speculative_draft.token_ids:
             # Fix B1: Check ALL root nodes, not just the first one.
             # The target model might have picked any of the root branches.
-            root_indices = [
-                i for i, p in enumerate(speculative_draft.topology_map) if p == -1
-            ]
+            root_indices = [i for i, p in enumerate(speculative_draft.topology_map) if p == -1]
             for root_idx in root_indices:
                 if verify_result.bonus_token == speculative_draft.token_ids[root_idx]:
                     bonus_matches = True
@@ -1250,9 +1262,7 @@ async def run_speculative_loop_async(
                 old_ids = speculative_draft.token_ids
                 old_topo = speculative_draft.topology_map
                 # BFS from CHILDREN of matched root (promote them to roots)
-                children_of_matched = [
-                    j for j, p in enumerate(old_topo) if p == matched_root_idx
-                ]
+                children_of_matched = [j for j, p in enumerate(old_topo) if p == matched_root_idx]
                 if not children_of_matched:
                     # Matched root is a leaf — no subtree to reuse; re-draft
                     current_draft = None
@@ -1296,7 +1306,7 @@ async def run_speculative_loop_async(
                     speculative_draft = None
                 else:
                     keep: set[int] = set()
-                    
+
                     children_map: dict[int, list[int]] = {}
                     for i, parent_idx in enumerate(old_topo):
                         children_map.setdefault(parent_idx, []).append(i)
@@ -1312,8 +1322,7 @@ async def run_speculative_loop_async(
                     old_to_new = {old: new for new, old in enumerate(sorted_keep)}
                     new_ids = [old_ids[i] for i in sorted_keep]
                     new_topo = [
-                        -1 if old_topo[i] == matched_root_idx
-                        else old_to_new.get(old_topo[i], -1)
+                        -1 if old_topo[i] == matched_root_idx else old_to_new.get(old_topo[i], -1)
                         for i in sorted_keep
                     ]
                     # Preserve top_k and log_probs from original tree for correct
@@ -1422,9 +1431,7 @@ async def run_speculative_loop_async(
     total_spec = state.speculation_hits + state.speculation_misses
     spec_hit_rate = state.speculation_hits / total_spec if total_spec > 0 else 0.0
     acceptance_rate = (
-        state.total_accepted / state.total_path_depth
-        if state.total_path_depth > 0
-        else 0.0
+        state.total_accepted / state.total_path_depth if state.total_path_depth > 0 else 0.0
     )
 
     result = PipelineResult(

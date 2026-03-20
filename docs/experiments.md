@@ -10,7 +10,7 @@ telemetry.
 
 1. **Both workers running** — see [Project Guide](project_guide.md) for startup.
 2. **A prompt dataset** — JSONL file, one JSON object per line.
-3. **Python environment** — `pip install -e ".[dev]"` completed.
+3. **Python environment** — `uv pip install -e ".[dev]"` completed.
 
 ---
 
@@ -39,9 +39,13 @@ turn from `"conversations"`:
 ## Basic Run
 
 ```bash
-python scripts/benchmark_run.py \
-    --dataset data/prompts.jsonl \
-    --output results/baseline.csv
+python benchmarks/runner.py \
+    --prompts data/prompts.jsonl \
+    --results-dir benchmarks/results/baseline \
+    --draft-addr localhost:50051 \
+    --target-addr localhost:50052 \
+    --tokenizer gpt2 \
+    --gamma 5
 ```
 
 This runs every prompt with the default Gamma (K=5) and writes per-request
@@ -60,26 +64,18 @@ cache rollback depth (`kv_cache.py`).
 Sweep multiple values in a single invocation:
 
 ```bash
-python scripts/benchmark_run.py \
-    --dataset data/prompts.jsonl \
-    --output results/gamma_sweep.csv \
+python benchmarks/runner.py \
+    --prompts data/prompts.jsonl \
+    --results-dir benchmarks/results/gamma_sweep \
+    --draft-addr localhost:50051 \
+    --target-addr localhost:50052 \
+    --tokenizer gpt2 \
     --gamma 1 3 5 8 12
 ```
 
-The script runs the full dataset once per gamma value and writes all results to
-a single CSV.  The summary table printed at the end is grouped by gamma:
-
-```
-==========================================================================================
-BENCHMARK SUMMARY
-==========================================================================================
- Gamma   Reqs    Avg TTFT    Avg TPOT   Avg Accept   Avg NetIdle   Avg Latency
-------------------------------------------------------------------------------------------
-     1     50     12.34ms      3.21ms       100.00%       4.12ms       161.23ms
-     5     50     14.56ms      2.01ms        87.30%       5.67ms       102.45ms
-    12     50     18.90ms      1.45ms        72.10%       7.89ms        74.32ms
-==========================================================================================
-```
+The runner runs the full dataset once per gamma value and writes:
+- `benchmarks/results/<run>/summary.csv` (per-gamma aggregation)
+- `benchmarks/results/<run>/per_round.csv` (per-request, per-round details)
 
 ---
 
@@ -106,35 +102,29 @@ Each row in the output CSV contains:
 
 ```bash
 # Limit generation length
-python scripts/benchmark_run.py \
-    --dataset data/prompts.jsonl \
+python benchmarks/runner.py \
+    --prompts data/prompts.jsonl \
+    --results-dir benchmarks/results/custom \
     --max-output-tokens 128 \
     --max-rounds 10
 
 # Point at custom worker addresses
 SPECSPLIT_ORCH_DRAFT_ADDRESS=gpu1:50051 \
 SPECSPLIT_ORCH_TARGET_ADDRESS=gpu2:50052 \
-    python scripts/benchmark_run.py --dataset data/prompts.jsonl
+    python benchmarks/runner.py \
+        --prompts data/prompts.jsonl \
+        --results-dir benchmarks/results/custom
 ```
 
 ---
 
 ## Analyzing Results
 
-The CSV can be loaded directly into pandas, a Jupyter notebook, or any
-spreadsheet:
+Use `benchmarks/analyze_results.py` to generate plots/tables from the CSVs
+emitted by `benchmarks/runner.py`:
 
-```python
-import pandas as pd
-import matplotlib.pyplot as plt
-
-df = pd.read_csv("results/gamma_sweep.csv")
-
-# TPOT vs Gamma
-df.groupby("gamma")["tpot_ms"].mean().plot(kind="bar", title="Avg TPOT by Gamma")
-plt.ylabel("ms / token")
-plt.tight_layout()
-plt.savefig("results/tpot_vs_gamma.png")
+```bash
+python benchmarks/analyze_results.py --results-dir benchmarks/results/custom
 ```
 
 ### Key Plots to Produce

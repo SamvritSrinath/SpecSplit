@@ -46,8 +46,9 @@ specsplit/
 tests/
 ├── unit/                   # Fast, no-model tests
 └── integration/            # Tests requiring model downloads
-scripts/
-└── benchmark_run.py        # Load-testing harness with CSV output
+benchmarks/
+├── runner.py                # Benchmark harness (writes CSVs)
+└── run.sh                   # Convenience wrapper around runner.py
 docs/                       # You are here
 ```
 
@@ -61,10 +62,10 @@ git clone https://github.com/<your-org>/SpecSplit.git
 cd SpecSplit
 
 # Create a virtual environment (Python 3.10+)
-python -m venv .venv && source .venv/bin/activate
+uv venv && source .venv/bin/activate
 
 # Install in editable mode with dev dependencies
-pip install -e ".[dev]"
+uv pip install -e ".[dev]"
 
 # Generate gRPC stubs from proto
 make proto
@@ -85,7 +86,13 @@ Override any default via the environment:
 | `SPECSPLIT_TARGET_MAX_SESSIONS` | `16` | Max concurrent KV cache sessions |
 | `SPECSPLIT_ORCH_DRAFT_ADDRESS` | `localhost:50051` | gRPC address of draft worker |
 | `SPECSPLIT_ORCH_TARGET_ADDRESS` | `localhost:50052` | gRPC address of target worker |
-| `SPECSPLIT_ORCH_MAX_OUTPUT_TOKENS` | `256` | Max tokens to generate per prompt |
+| `SPECSPLIT_ORCH_MAX_ROUNDS` | `20` | Max draft→verify rounds per prompt |
+| `SPECSPLIT_ORCH_MAX_OUTPUT_TOKENS` | `1024` | Max total tokens to generate per prompt |
+| `SPECSPLIT_ORCH_MAX_DRAFT_TOKENS` | `5` | Draft tree depth (K / gamma) forwarded to Draft Worker |
+| `SPECSPLIT_ORCH_DRAFT_TEMPERATURE` | `0.25` | Draft sampling temperature (0 = greedy) |
+| `SPECSPLIT_ORCH_VERIFY_TEMPERATURE` | `0.0` | Verification sampling temperature (0 = greedy) |
+| `SPECSPLIT_ORCH_USE_TARGET_KV_CACHE` | `true` | Enable target KV cache (stateful verification) |
+| `SPECSPLIT_ORCH_TOKENIZER_MODEL` | `gpt2` | HF model name used for tokenizer |
 
 ---
 
@@ -111,8 +118,36 @@ SPECSPLIT_DRAFT_DEVICE=cuda:1 \
 
 ```bash
 python -m specsplit.workers.orchestrator.client \
-    --prompt "Explain the CAP theorem in distributed systems."
+    --prompt "What is the Capital of France?" \
+    --max-rounds 20 \
+    --max-output-tokens 256 \
+    --max-draft-tokens 3 \
+    --draft-temperature 0.15 \
+    --verify-temperature 0.15 \
+    --use-target-cache
 ```
+
+---
+
+## Remote Workers (optional)
+
+For running Draft/Target workers behind a public endpoint (e.g., via `ngrok`),
+use `scripts/manage_remote_worker.sh`.
+
+1. Create env files from:
+   - `scripts/remote_worker.draft.env.example`
+   - `scripts/remote_worker.target.env.example`
+2. Start and manage the workers:
+```bash
+scripts/manage_remote_worker.sh start ~/specsplit-target.env
+scripts/manage_remote_worker.sh status ~/specsplit-target.env
+scripts/manage_remote_worker.sh logs   ~/specsplit-target.env
+scripts/manage_remote_worker.sh stop   ~/specsplit-target.env
+scripts/manage_remote_worker.sh update ~/specsplit-target.env
+```
+
+See `scripts/start_documentation.md` for a worked example (including the
+Orchestrator CLI invocation).
 
 ---
 

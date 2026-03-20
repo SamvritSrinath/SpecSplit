@@ -222,9 +222,7 @@ class OrchestratorConfig(BaseSettings):
         return self
 
 
-# ============================================================================
 # Config File Loader
-# ============================================================================
 
 
 def load_config_file(path: str | Path) -> dict[str, Any]:
@@ -263,16 +261,13 @@ def load_config_file(path: str | Path) -> dict[str, Any]:
             import yaml
         except ImportError as exc:
             raise ImportError(
-                "PyYAML is required to load YAML config files. "
-                "Install with: pip install pyyaml"
+                "PyYAML is required to load YAML config files. Install with: pip install pyyaml"
             ) from exc
         data = yaml.safe_load(text) or {}
     elif suffix == ".json":
         data = json.loads(text)
     else:
-        raise ValueError(
-            f"Unsupported config file format '{suffix}'. Use .yaml, .yml, or .json."
-        )
+        raise ValueError(f"Unsupported config file format '{suffix}'. Use .yaml, .yml, or .json.")
 
     if not isinstance(data, dict):
         raise ValueError(f"Config file must contain a top-level mapping, got {type(data).__name__}")

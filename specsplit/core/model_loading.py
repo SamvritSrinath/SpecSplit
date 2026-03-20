@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from unittest.mock import Mock
 
 import torch
@@ -37,7 +37,10 @@ def _read_local_config_json(model_name: str) -> dict[str, Any]:
         return {}
 
     try:
-        return json.loads(config_path.read_text())
+        data = json.loads(config_path.read_text())
+        if isinstance(data, dict):
+            return cast(dict[str, Any], data)
+        return {}
     except OSError as exc:
         logger.warning("Failed to read checkpoint config %s: %s", config_path, exc)
     except json.JSONDecodeError as exc:

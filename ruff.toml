@@ -1,0 +1,21 @@
+target-version = "py310"
+line-length = 100
+src = ["specsplit", "tests"]
+
+[lint]
+select = [
+    "E",   # pycodestyle errors
+    "W",   # pycodestyle warnings
+    "F",   # pyflakes
+    "I",   # isort
+    "N",   # pep8-naming
+    "UP",  # pyupgrade
+    "B",   # flake8-bugbear
+    "SIM", # flake8-simplify
+    "RUF", # ruff-specific rules
+]
+ignore = ["E501"] # line length handled by formatter
+
+[lint.isort]
+known-first-party = ["specsplit"]
+

@@ -37,9 +37,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
 # Unified Result Dataclass
-# ============================================================================
 
 
 @dataclass(frozen=True)
@@ -91,9 +89,7 @@ class VerificationResult:
         return self.num_accepted / self.num_draft_tokens
 
 
-# ============================================================================
 # Core: Greedy Tree Verification
-# ============================================================================
 
 
 def verify_greedy_tree(
@@ -252,18 +248,18 @@ def verify_greedy_tree(
     # ------------------------------------------------------------------
     # Step 6: Extract results
     # ------------------------------------------------------------------
-    accepted_tokens: list[int] = [draft_tokens[idx].item() for idx in best_path]
+    accepted_tokens: list[int] = [int(draft_tokens[idx].item()) for idx in best_path]
 
     # Bonus token: the target's greedy choice at the divergence point.
     # - If the path ended at a rejection: bonus = target's choice there.
     # - If the path went all the way to a leaf (fully accepted):
     #   bonus = target's choice at the leaf (extends sequence by 1).
     if best_divergence_node >= 0:
-        bonus_token = target_choices_list[best_divergence_node]
+        bonus_token = int(target_choices_list[best_divergence_node])
     else:
         # Edge case: all roots were rejected on the first token.
         # Use the target's choice at the first root as the bonus.
-        bonus_token = target_choices_list[roots[0]] if roots else -1
+        bonus_token = int(target_choices_list[roots[0]]) if roots else -1
 
     accepted_leaf_index = best_path[-1] if best_path else -1
 
@@ -327,8 +323,7 @@ def verify_stochastic_tree(
         )
     if draft_probs.shape[0] != num_tree_nodes:
         raise ValueError(
-            f"draft_probs length ({draft_probs.shape[0]}) != "
-            f"topology_map length ({num_tree_nodes})"
+            f"draft_probs length ({draft_probs.shape[0]}) != topology_map length ({num_tree_nodes})"
         )
     if target_probs.shape[0] != num_tree_nodes:
         raise ValueError(
@@ -448,26 +443,19 @@ def verify_stochastic_tree(
                 draft_token_id = d_tokens[best_divergence_node]
                 q_val = d_probs[best_divergence_node]
                 residual_probs = p_dist.clone()
-                residual_probs[draft_token_id] = torch.relu(
-                    p_dist[draft_token_id] - q_val
-                )
+                residual_probs[draft_token_id] = torch.relu(p_dist[draft_token_id] - q_val)
             residual_sum = residual_probs.sum()
             if residual_sum > 0:
-                bonus_token = torch.multinomial(
-                    residual_probs / residual_sum, 1
-                ).item()
+                bonus_token = int(torch.multinomial(residual_probs / residual_sum, 1).item())
             else:
-                bonus_token = torch.multinomial(p_dist, 1).item()
+                bonus_token = int(torch.multinomial(p_dist, 1).item())
         else:
             # Fully accepted path: sample from target distribution at leaf
-            bonus_token = torch.multinomial(p_dist, 1).item()
+            bonus_token = int(torch.multinomial(p_dist, 1).item())
     else:
         # Edge case: all roots were rejected on the first token, but we didn't track them.
         # Fallback to the first root
-        if roots:
-            bonus_token = torch.multinomial(target_probs[roots[0]], 1).item()
-        else:
-            bonus_token = -1
+        bonus_token = int(torch.multinomial(target_probs[roots[0]], 1).item()) if roots else -1
 
     return VerificationResult(
         accepted_tokens=accepted_tokens,

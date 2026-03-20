@@ -7,11 +7,11 @@ from specsplit.core.verification import VerificationResult, verify_greedy_tree
 
 __all__ = [
     "DraftWorkerConfig",
-    "VerificationResult",
     "OrchestratorConfig",
     "Stopwatch",
     "TargetWorkerConfig",
     "TelemetryLogger",
+    "VerificationResult",
     "tensor_to_token_ids",
     "token_ids_to_tensor",
     "verify_greedy_tree",

@@ -13,8 +13,6 @@ help: ## Show this help message
 install: ## Install package in editable mode with dev dependencies
 	pip install -e ".[dev]"
 
-UNAME_S := $(shell uname -s)
-
 proto: ## Generate Python stubs from protobuf definitions
 	python -m grpc_tools.protoc \
 		--proto_path=$(PROTO_DIR) \
@@ -22,13 +20,8 @@ proto: ## Generate Python stubs from protobuf definitions
 		--grpc_python_out=$(PROTO_DIR) \
 		--mypy_out=$(PROTO_DIR) \
 		$(PROTO_SRC)
-ifeq ($(UNAME_S),Darwin)
-	sed -i '' 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
-		$(PROTO_DIR)/spec_decoding_pb2_grpc.py
-else
-	sed -i 's/^import spec_decoding_pb2/from specsplit.proto import spec_decoding_pb2/' \
-		$(PROTO_DIR)/spec_decoding_pb2_grpc.py
-endif
+	python scripts/patch_proto_imports.py \
+		--file $(PROTO_DIR)/spec_decoding_pb2_grpc.py
 	@echo "✓ Proto stubs generated in $(PROTO_DIR)/"
 
 test: ## Run unit tests (excludes integration)
@@ -41,14 +34,14 @@ test-cov: ## Run tests with coverage report
 	pytest tests/unit/ -v --cov=specsplit --cov-report=term-missing --cov-report=html
 
 lint: ## Run linter (ruff)
-	ruff check specsplit/ tests/ scripts/
+	ruff check --config ruff.toml specsplit/ tests/ scripts/
 
 typecheck: ## Run static type checking (mypy)
-	mypy specsplit/
+	mypy --config-file mypy.ini specsplit/
 
 format: ## Auto-format code (ruff)
-	ruff format specsplit/ tests/ scripts/
-	ruff check --fix specsplit/ tests/ scripts/
+	ruff format --config ruff.toml specsplit/ tests/ scripts/
+	ruff check --config ruff.toml --fix specsplit/ tests/ scripts/
 
 clean: ## Remove generated files, caches, and build artifacts
 	find . -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true

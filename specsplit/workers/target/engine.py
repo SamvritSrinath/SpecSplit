@@ -19,12 +19,13 @@ Architecture Notes:
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass
-from typing import Any
+from typing import Any, cast
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -60,9 +61,7 @@ class CacheDesyncError(RuntimeError):
     """
 
 
-# =============================================================================
 # Data Classes
-# =============================================================================
 
 
 @dataclass
@@ -111,9 +110,7 @@ class KVCacheState:
     last_accessed: float = 0.0  # D3: timestamp for TTL garbage collection
 
 
-# =============================================================================
 # Helpers
-# =============================================================================
 
 
 def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Tensor], ...] | None:
@@ -126,10 +123,7 @@ def _to_legacy_cache(past_key_values: Any) -> tuple[tuple[torch.Tensor, torch.Te
     return cache_to_legacy(past_key_values)
 
 
-
-# =============================================================================
 # Target Engine
-# =============================================================================
 
 
 class TargetEngine:
@@ -313,7 +307,8 @@ class TargetEngine:
             )
 
         cache_state.seq_len = cache_state.cache.seq_len
-        return outputs.logits[0, -1, :].detach().clone()
+        logits = cast(torch.Tensor, outputs.logits)
+        return logits[0, -1, :].detach().clone()
 
     # --------------------------------------------------------------------- #
     # Session management
@@ -431,7 +426,8 @@ class TargetEngine:
         purged_ids: list[str] = []
         with self._session_dict_lock:
             stale_ids = [
-                sid for sid, cache in list(self._session_caches.items())
+                sid
+                for sid, cache in list(self._session_caches.items())
                 if (now - cache.last_accessed) > ttl
             ]
         for sid in stale_ids:
@@ -455,7 +451,9 @@ class TargetEngine:
                 if lock is not None and acquired:
                     lock.release()
         if purged_ids:
-            logger.info("Purged %d stale sessions (ttl=%.0fs): %s", len(purged_ids), ttl, purged_ids)
+            logger.info(
+                "Purged %d stale sessions (ttl=%.0fs): %s", len(purged_ids), ttl, purged_ids
+            )
         return len(purged_ids)
 
     def shutdown(self) -> None:
@@ -465,10 +463,8 @@ class TargetEngine:
             self._ttl_thread.join(timeout=1.0)
 
     def __del__(self) -> None:
-        try:
+        with contextlib.suppress(Exception):
             self.shutdown()
-        except Exception:
-            pass
 
     # --------------------------------------------------------------------- #
     # KV Cache rollback
@@ -665,7 +661,9 @@ class TargetEngine:
                 else:
                     # Cache hit: append delta prompt tokens first so the tree is verified
                     # against the exact same prefix the draft worker used.
-                    prefix_next_logit = self._advance_cache_with_tokens(cache_state, delta_token_ids)
+                    prefix_next_logit = self._advance_cache_with_tokens(
+                        cache_state, delta_token_ids
+                    )
                     prefix_length = cache_state.seq_len
                     past_kv = cache_state.cache
             else:
@@ -748,7 +746,8 @@ class TargetEngine:
             all_logits = outputs.logits  # [1, input_len, vocab_size]
 
             tree_logits = torch.zeros(
-                num_tree_nodes, all_logits.shape[-1],
+                num_tree_nodes,
+                all_logits.shape[-1],
                 dtype=all_logits.dtype,
                 device=self.device,
             )
@@ -811,16 +810,16 @@ class TargetEngine:
                 next_logits = all_logits[0, base + leaf_idx, :]
                 if temperature > 0.0:
                     next_probs = torch.softmax(next_logits / temperature, dim=-1)
-                    correction = torch.multinomial(next_probs, 1).item()
+                    correction = int(torch.multinomial(next_probs, 1).item())
                 else:
-                    correction = next_logits.argmax(dim=-1).item()
+                    correction = int(next_logits.argmax(dim=-1).item())
 
             # --- Step 8: Rollback cache to accepted prefix and update logic states ---
             if session_id is not None and cache_state is not None:
                 accepted_total = prefix_length + num_accepted
                 # Fix A1: Extract accepted_indices from verification result
                 # for proper KV cache compaction on branching trees.
-                accepted_tree_indices = getattr(result_data, 'accepted_indices', None)
+                accepted_tree_indices = getattr(result_data, "accepted_indices", None)
                 if accepted_total <= cache_state.seq_len:
                     self.rollback_cache(
                         session_id,
@@ -853,6 +852,7 @@ class TargetEngine:
         finally:
             if session_lock is not None:
                 session_lock.release()
+
     # --------------------------------------------------------------------- #
     # Properties
     # --------------------------------------------------------------------- #

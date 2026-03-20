@@ -66,9 +66,7 @@ import torch
 logger = logging.getLogger(__name__)
 
 
-# ============================================================================
 # Core: Build Tree Attention Mask & Position IDs
-# ============================================================================
 
 
 def build_tree_attention(
@@ -116,8 +114,9 @@ def build_tree_attention(
     # This ordering is required for the ancestor-inheritance slices below:
     # mask[i, prefix_length:prefix_length+i] and mask[row, prefix_length:row].
     if num_tree_nodes > 0:
-        assert all(topology_map[i] < i for i in range(num_tree_nodes) if topology_map[i] != -1), \
+        assert all(topology_map[i] < i for i in range(num_tree_nodes) if topology_map[i] != -1), (
             "topology_map is not topologically sorted"
+        )
 
     # ------------------------------------------------------------------
     # Step 2: Build the attention mask (sparse or full)
@@ -134,7 +133,9 @@ def build_tree_attention(
             if parent != -1:
                 depths[i] = depths[parent] + 1
                 # PR-9: Inherit parent's ancestors directly via boolean mask slice
-                mask[i, prefix_length : prefix_length + i] = mask[parent, prefix_length : prefix_length + i]
+                mask[i, prefix_length : prefix_length + i] = mask[
+                    parent, prefix_length : prefix_length + i
+                ]
                 # Include the parent itself
                 mask[i, prefix_length + parent] = True
             else:
@@ -162,7 +163,7 @@ def build_tree_attention(
                 depths[i] = depths[parent] + 1
                 parent_row = prefix_length + parent
                 # PR-9: Inherit parent's ancestors directly via boolean mask slice
-                mask[row, prefix_length : row] = mask[parent_row, prefix_length : row]
+                mask[row, prefix_length:row] = mask[parent_row, prefix_length:row]
                 # Include the parent itself
                 mask[row, parent_row] = True
             else:
@@ -195,8 +196,7 @@ def build_tree_attention(
     position_ids = position_ids.unsqueeze(0)
 
     logger.debug(
-        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, "
-        "mask_rows=%d, tree_only=%s",
+        "Built tree attention: prefix_len=%d, tree_nodes=%d, total=%d, mask_rows=%d, tree_only=%s",
         prefix_length,
         num_tree_nodes,
         total_len,
@@ -207,12 +207,7 @@ def build_tree_attention(
     return attention_mask, position_ids
 
 
-
-
-
-# ============================================================================
 # Utility: Convert boolean mask to float mask (for Flash Attention compat)
-# ============================================================================
 
 
 def bool_mask_to_float(

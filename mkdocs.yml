@@ -1,0 +1,47 @@
+site_name: SpecSplit
+site_url: https://samvritsrinath.github.io/SpecSplit
+repo_url: https://github.com/SamvritSrinath/SpecSplit
+
+theme:
+  name: material
+  features:
+    - content.code.copy
+    - navigation.sections
+
+use_directory_urls: true
+
+plugins:
+  - search
+  - mermaid2
+  - mkdocstrings:
+      default_handler: python
+      handlers:
+        python:
+          paths: ["."]
+          options:
+            show_source: false
+
+markdown_extensions:
+  - pymdownx.snippets
+
+nav:
+  - Home: index.md
+  - Architecture: architecture.md
+  - Project Guide: project_guide.md
+  - Experiments: experiments.md
+  - Testing: testing.md
+  - Protocol: proto/README.md
+  - Core: specsplit/core/README.md
+  - API Reference:
+      - Overview: api/index.md
+      - Core Modules: api/core.md
+      - Draft Worker API: api/draft.md
+      - Target Worker API: api/target.md
+      - Orchestrator API: api/orchestrator.md
+  - Draft Worker: specsplit/workers/draft/README.md
+  - Target Worker: specsplit/workers/target/README.md
+  - Orchestrator Worker: specsplit/workers/orchestrator/README.md
+  - Benchmarks: benchmarks/README.md
+  - Tests: tests/README.md
+  - Platforms: platforms/README.md
+

@@ -80,15 +80,20 @@ class TestOrchestratorConfig:
 
         assert _resolve_tokenizer_model("gpt2") == "/models/qwen-target"
 
-    def test_resolve_tokenizer_model_prefers_probed_workers_over_env(self, monkeypatch: pytest.MonkeyPatch):
+    def test_resolve_tokenizer_model_prefers_probed_workers_over_env(
+        self, monkeypatch: pytest.MonkeyPatch
+    ):
         monkeypatch.setenv("SPECSPLIT_DRAFT_MODEL_NAME", "/models/env-draft")
         monkeypatch.setenv("SPECSPLIT_TARGET_MODEL_NAME", "/models/env-target")
 
-        assert _resolve_tokenizer_model(
-            "gpt2",
-            draft_model_name="/models/ping-draft",
-            target_model_name="/models/ping-target",
-        ) == "/models/ping-target"
+        assert (
+            _resolve_tokenizer_model(
+                "gpt2",
+                draft_model_name="/models/ping-draft",
+                target_model_name="/models/ping-target",
+            )
+            == "/models/ping-target"
+        )
 
     def test_ensure_tokenizer_uses_ping_vocab_sizes_without_loading_worker_paths(
         self,

@@ -111,9 +111,7 @@ class TestVerifyStochasticTree:
         draft_probs = torch.tensor([], dtype=torch.float32)
         target_probs = torch.zeros(0, 64)
         topology_map: list[int] = []
-        result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map
-        )
+        result = verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
         assert result.accepted_tokens == []
         assert result.bonus_token == -1
         assert result.num_accepted == 0
@@ -127,9 +125,7 @@ class TestVerifyStochasticTree:
         target_probs = torch.ones(2, 64) / 64
         topology_map = [0, 0]  # no root
         with pytest.raises(ValueError, match="no root nodes"):
-            verify_stochastic_tree(
-                draft_tokens, draft_probs, target_probs, topology_map
-            )
+            verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
 
     def test_single_path_all_accepted(self) -> None:
         """When p >= q at every node, full path is accepted (deterministic)."""
@@ -143,9 +139,7 @@ class TestVerifyStochasticTree:
         target_probs[1, 20] = 0.5
         target_probs[2, 30] = 0.5
         topology_map = [-1, 0, 1]
-        result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map
-        )
+        result = verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
         assert result.accepted_tokens == [10, 20, 30]
         assert result.num_accepted == 3
         assert result.accepted_leaf_index == 2
@@ -162,9 +156,7 @@ class TestVerifyStochasticTree:
         target_probs[1, 20] = 0.5
         topology_map = [-1, 0]
         # With p=0.1, q=0.9: p/q < 1, so may reject. Run multiple times or fix seed.
-        result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map
-        )
+        result = verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
         # Either 0 or 1 accepted depending on random; bonus_token from divergence/root
         assert result.num_accepted <= 2
         assert result.bonus_token >= 0 or result.num_accepted == 0
@@ -174,23 +166,27 @@ class TestVerifyStochasticTree:
         torch.manual_seed(42)
         draft_tokens = torch.tensor([10], dtype=torch.long)
         draft_probs = torch.tensor([1.0], dtype=torch.float32)
-        
+
         vocab_size = 64
         target_probs = torch.zeros(1, vocab_size)
         target_probs[0, 10] = 0.5
         target_probs[0, 20] = 0.5
-        
+
         draft_probs_full = torch.zeros(1, vocab_size)
         draft_probs_full[0, 10] = 0.5
         draft_probs_full[0, 20] = 0.5
-        
+
         topology_map = [-1]
-        
+
         # p=0.5, q=1.0 -> p/q = 0.5. torch.manual_seed(42) produces ~0.88 > 0.5, so REJECT.
-        # residual = relu(p - q) = relu(0) = 0. Sum is 0. 
+        # residual = relu(p - q) = relu(0) = 0. Sum is 0.
         # Fallback multinomial from target_probs (50% 10, 50% 20).
         result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map, draft_probs_full=[draft_probs_full[0]]
+            draft_tokens,
+            draft_probs,
+            target_probs,
+            topology_map,
+            draft_probs_full=[draft_probs_full[0]],
         )
         assert result.num_accepted == 0
         assert result.bonus_token in (10, 20)
@@ -209,9 +205,7 @@ class TestVerifyStochasticTree:
         target_probs[1, 17] = 0.6
         target_probs[2, 99] = 0.6
         topology_map = [-1, 0, 0]  # root 0, children 1 and 2
-        result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map
-        )
+        result = verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
         assert result.num_accepted == 2  # root + one child (longest path length 2)
         assert result.accepted_tokens in ([42, 17], [42, 99])
         assert result.bonus_token >= 0
@@ -223,9 +217,7 @@ class TestVerifyStochasticTree:
         target_probs = torch.ones(2, 64) / 64
         topology_map = [-1, 0]
         with pytest.raises(ValueError, match="draft_tokens length"):
-            verify_stochastic_tree(
-                draft_tokens, draft_probs, target_probs, topology_map
-            )
+            verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
 
     def test_shape_mismatch_draft_probs_raises(self) -> None:
         """Draft probs length mismatch raises ValueError."""
@@ -234,9 +226,7 @@ class TestVerifyStochasticTree:
         target_probs = torch.ones(2, 64) / 64
         topology_map = [-1, 0]
         with pytest.raises(ValueError, match="draft_probs length"):
-            verify_stochastic_tree(
-                draft_tokens, draft_probs, target_probs, topology_map
-            )
+            verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
 
     def test_shape_mismatch_target_probs_raises(self) -> None:
         """Target probs first dim mismatch raises ValueError."""
@@ -245,9 +235,7 @@ class TestVerifyStochasticTree:
         target_probs = torch.ones(3, 64) / 64
         topology_map = [-1, 0]
         with pytest.raises(ValueError, match="target_probs first dim"):
-            verify_stochastic_tree(
-                draft_tokens, draft_probs, target_probs, topology_map
-            )
+            verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
 
     def test_q_zero_rejects(self) -> None:
         """When draft prob q is 0, node is rejected (avoid div by zero); bonus from root."""
@@ -257,9 +245,7 @@ class TestVerifyStochasticTree:
         target_probs = torch.zeros(1, vocab_size)
         target_probs[0, 10] = 1.0
         topology_map = [-1]
-        result = verify_stochastic_tree(
-            draft_tokens, draft_probs, target_probs, topology_map
-        )
+        result = verify_stochastic_tree(draft_tokens, draft_probs, target_probs, topology_map)
         assert result.num_accepted == 0
         assert result.accepted_tokens == []
         # Divergence node is the root; bonus sampled from target at root.

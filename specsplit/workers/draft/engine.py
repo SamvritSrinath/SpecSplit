@@ -21,7 +21,7 @@ import logging
 import math
 import threading
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, cast
 
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
@@ -212,7 +212,10 @@ class DraftEngine:
 
         logger.debug(
             "Draft generation: k=%d, num_beams=%d, temperature=%.2f (greedy=%s)",
-            k, num_beams, temperature, temperature == 0.0,
+            k,
+            num_beams,
+            temperature,
+            temperature == 0.0,
         )
 
         sw = Stopwatch()
@@ -289,7 +292,7 @@ class DraftEngine:
                     use_cache=True,
                 )
             past_kv = prefix_out.past_key_values
-            last_logits = prefix_out.logits[:, -1, :]
+            last_logits = cast(torch.Tensor, prefix_out.logits[:, -1, :])
         elif match_len > 0:
             # Case C: Partial overlap — only reusable when the cache supports rollback.
             reuse_len = match_len - 1
@@ -305,7 +308,7 @@ class DraftEngine:
                         use_cache=True,
                     )
                 past_kv = prefix_out.past_key_values
-                last_logits = prefix_out.logits[:, -1, :]
+                last_logits = cast(torch.Tensor, prefix_out.logits[:, -1, :])
             else:
                 # Hybrid recurrent caches cannot be rolled back safely; rebuild.
                 input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
@@ -316,7 +319,7 @@ class DraftEngine:
                         use_cache=True,
                     )
                 past_kv = prefix_out.past_key_values
-                last_logits = prefix_out.logits[:, -1, :]
+                last_logits = cast(torch.Tensor, prefix_out.logits[:, -1, :])
         else:
             # Case D: Complete mismatch or empty cache — full O(N) recompute.
             input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
@@ -327,7 +330,20 @@ class DraftEngine:
                     use_cache=True,
                 )
             past_kv = prefix_out.past_key_values
-            last_logits = prefix_out.logits[:, -1, :]
+            last_logits = cast(torch.Tensor, prefix_out.logits[:, -1, :])
+
+        if last_logits is None:
+            # Cache was missing logits (partially initialized). Recompute
+            # so `last_logits` is always a Tensor for downstream logic.
+            input_ids = torch.tensor([prompt_ids], dtype=torch.long, device=self.device)
+            with torch.no_grad():
+                prefix_out = self._model(
+                    input_ids=input_ids,
+                    past_key_values=None,
+                    use_cache=True,
+                )
+            past_kv = prefix_out.past_key_values
+            last_logits = cast(torch.Tensor, prefix_out.logits[:, -1, :])
 
         # Update cache state for next round
         cache_state.kv_cache = past_kv
@@ -336,7 +352,7 @@ class DraftEngine:
         cache_state.cached_last_logits = last_logits
 
         # -----------------------------------------------------------------
-        # Task 2.2: True Level-Order Batching (Bug 4 Fix)
+        # Task 2.2: True Level-Order Batching
         # -----------------------------------------------------------------
         # Process ALL nodes at each depth level in a single forward pass,
         # instead of one forward pass per parent node. This maximizes GPU
@@ -345,23 +361,22 @@ class DraftEngine:
 
         # Level queue: list of (parent_node, past_key_values, logits)
         # All entries share the same depth. We start at depth 0.
-        current_level = [(None, past_kv, last_logits)]
+        current_level: list[tuple[TokenNode | None, Any, torch.Tensor]] = [
+            (None, past_kv, last_logits)
+        ]
 
         for depth in range(k):
             if not current_level:
                 break
 
             # --- Phase 1: For each entry in current_level, compute top-B tokens ---
-            next_level_entries: list[tuple[TokenNode, Any, torch.Tensor]] = []
+            next_level_entries: list[tuple[TokenNode | None, Any, torch.Tensor]] = []
 
             # Dynamic Branching Topology:
             # Greedy (T=0): branching_factor must be 1 — secondary beams have P=0
             # and would always reject on target; branching is mathematically invalid.
             # Stochastic: reduce branching deeper to prevent exponential explosion.
-            if temperature == 0.0:
-                branching_factor = 1
-            else:
-                branching_factor = max(1, num_beams - depth)
+            branching_factor = 1 if temperature == 0.0 else max(1, num_beams - depth)
 
             # Collect all (parent_node, token_id, prob, past_kv, top_k_ids, top_k_probs)
             expansion_items: list[
@@ -370,14 +385,11 @@ class DraftEngine:
 
             with torch.no_grad():
                 for parent_node, entry_past_kv, entry_logits in current_level:
-                    # Fix Bug 3: With temp=0, logits_to_probs returns one-hot; topk would
-                    # yield invalid non-primary beams. Use topk on raw logits instead.
+                    # With temperature=0, use deterministic top-1 from raw logits.
                     if temperature == 0.0:
                         if branching_factor == 1:
                             top_indices = entry_logits.argmax(dim=-1, keepdim=True)
-                            top_probs = torch.ones_like(
-                                top_indices, dtype=entry_logits.dtype
-                            )
+                            top_probs = torch.ones_like(top_indices, dtype=entry_logits.dtype)
                         else:
                             top_logits, top_indices = torch.topk(
                                 entry_logits, branching_factor, dim=-1
@@ -385,9 +397,7 @@ class DraftEngine:
                             top_probs = torch.softmax(top_logits, dim=-1)
                     else:
                         probs = logits_to_probs(entry_logits, temperature=temperature)
-                        top_indices = torch.multinomial(
-                            probs, num_samples=branching_factor
-                        )
+                        top_indices = torch.multinomial(probs, num_samples=branching_factor)
                         top_probs = torch.gather(probs, -1, top_indices)
 
                     # Top-K draft distribution for correct residual sampling.
@@ -397,18 +407,16 @@ class DraftEngine:
                     if temperature == 0.0:
                         probs_for_topk = logits_to_probs(entry_logits, temperature=0.0)
                     else:
-                        probs_for_topk = logits_to_probs(
-                            entry_logits, temperature=temperature
-                        )
+                        probs_for_topk = logits_to_probs(entry_logits, temperature=temperature)
                     topk_probs, topk_idx = torch.topk(probs_for_topk, k_probs, dim=-1)
                     topk_ids = topk_idx[0].cpu().tolist()
                     topk_vals = topk_probs[0].cpu().tolist()
 
                     for b in range(branching_factor):
-                        token_id_int = top_indices[0, b].item()
+                        token_id_int = int(top_indices[0, b].item())
                         prob_val = max(top_probs[0, b].item(), 1e-10)
                         log_prob = math.log(prob_val)
-                        
+
                         if self._eos_token_id is not None and token_id_int == self._eos_token_id:
                             child_node = TokenNode(
                                 token_id=token_id_int,
@@ -437,7 +445,6 @@ class DraftEngine:
                 break
 
             # --- Phase 2: Batch ALL expansion items into a single forward pass ---
-            total_items = len(expansion_items)
             batch_input_ids = torch.tensor(
                 [[item[1]] for item in expansion_items],
                 dtype=torch.long,
@@ -467,14 +474,14 @@ class DraftEngine:
             # step_out.past_key_values: batched KV cache
 
             # --- Phase 3: Unpack and create TokenNodes, populate next_level ---
-            for i, (parent_node, token_id_int, log_prob, _, topk_ids, topk_probs) in enumerate(
+            for i, (parent_node, token_id_int, log_prob, _, topk_ids, topk_prob_vals) in enumerate(
                 expansion_items
             ):
                 child_node = TokenNode(
                     token_id=token_id_int,
                     log_prob=log_prob,
                     top_k_token_ids=topk_ids,
-                    top_k_probs=topk_probs,
+                    top_k_probs=topk_prob_vals,
                 )
 
                 if parent_node is None:
@@ -482,17 +489,19 @@ class DraftEngine:
                 else:
                     parent_node.children.append(child_node)
 
-                # Extract this item's KV cache from the batched output (Fix Bug 1).
+                # Extract this item's KV cache from the batched output.
                 branch_past_kv = slice_batch_item_from_cache(
                     step_out.past_key_values,
                     i,
                 )
 
-                next_level_entries.append((
-                    child_node,
-                    branch_past_kv,
-                    step_out.logits[i : i + 1, -1, :],
-                ))
+                next_level_entries.append(
+                    (
+                        child_node,
+                        branch_past_kv,
+                        step_out.logits[i : i + 1, -1, :],
+                    )
+                )
 
             current_level = next_level_entries
 

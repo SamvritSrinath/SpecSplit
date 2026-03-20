@@ -44,7 +44,7 @@ class VocabBridge:
         # For a full production implementation, one would iterate over
         # draft_tokenizer.get_vocab() and map strings to the target tokenizer.
         draft_vocab = self.draft_tokenizer.get_vocab()
-        
+
         # Determine fallback tokens for out-of-bounds IDs
         self.target_unk_token = getattr(self.target_tokenizer, "unk_token_id", 0)
         if self.target_unk_token is None:
@@ -53,7 +53,7 @@ class VocabBridge:
         self.draft_unk_token = getattr(self.draft_tokenizer, "unk_token_id", 0)
         if self.draft_unk_token is None:
             self.draft_unk_token = 0
-            
+
         # Map by token string
         for token_text, draft_id in draft_vocab.items():
             target_id = self.target_tokenizer.convert_tokens_to_ids(token_text)
@@ -62,8 +62,6 @@ class VocabBridge:
                 self._target_to_draft[target_id] = draft_id
             else:
                 self._draft_to_target[draft_id] = self.target_unk_token
-        
-
 
     def draft_to_target_id(self, draft_id: int) -> int:
         """Map a draft token ID to its closest target token ID."""

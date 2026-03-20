@@ -254,9 +254,7 @@ class TestSpeculationMiss:
         """Speculation miss counter increments when accepted ≠ assumed path."""
         draft_resp = _make_draft_response([10, 20])
         # Partial accept: accepted=[10] ≠ assumed=[10,20] → miss
-        verify_resp = _make_verify_response(
-            accepted_ids=[10], correction=55, num_accepted=1
-        )
+        verify_resp = _make_verify_response(accepted_ids=[10], correction=55, num_accepted=1)
 
         # Draft calls: initial + speculative + re-draft
         draft_stub = _FakeStub([draft_resp] * 3)
@@ -301,9 +299,7 @@ class TestSpeculationHit:
             accepted_ids=[10, 20, 30], correction=10, num_accepted=3
         )
         # Second round miss to stop cleanly
-        verify_resp_miss = _make_verify_response(
-            accepted_ids=[], correction=77, num_accepted=0
-        )
+        verify_resp_miss = _make_verify_response(accepted_ids=[], correction=77, num_accepted=0)
 
         # Draft calls: initial + speculative(r0) + speculative(r1) + re-draft(miss)
         draft_stub = _FakeStub([draft_resp] * 4)
@@ -366,9 +362,7 @@ class TestEOSTermination:
         """Pipeline stops when EOS token appears in accepted tokens."""
         draft_resp = _make_draft_response([10, 2, 30])  # 2 = EOS
         # Target accepts all, correction=99
-        verify_resp = _make_verify_response(
-            accepted_ids=[10, 2, 30], correction=99, num_accepted=3
-        )
+        verify_resp = _make_verify_response(accepted_ids=[10, 2, 30], correction=99, num_accepted=3)
 
         # Draft calls: initial + speculative(r0)
         draft_stub = _FakeStub([draft_resp] * 2)
@@ -403,9 +397,7 @@ class TestAcceptanceRate:
         """acceptance_rate = total_accepted / total_path_depth."""
         draft_resp = _make_draft_response([10, 20, 30])
         # Accept 2 out of 3 path tokens → miss
-        verify_resp = _make_verify_response(
-            accepted_ids=[10, 20], correction=55, num_accepted=2
-        )
+        verify_resp = _make_verify_response(accepted_ids=[10, 20], correction=55, num_accepted=2)
 
         # Draft calls: initial + speculative + re-draft
         draft_stub = _FakeStub([draft_resp] * 3)
@@ -470,9 +462,7 @@ class TestTimelineEvents:
         )
 
         send_events = [
-            event
-            for event in result.timeline_events
-            if event["event_type"] == "rpc_request_sent"
+            event for event in result.timeline_events if event["event_type"] == "rpc_request_sent"
         ]
         receive_events = [
             event
@@ -489,9 +479,7 @@ class TestTimelineEvents:
         )
 
         verify_receive = next(
-            event
-            for event in receive_events
-            if event["metadata"]["rpc"] == "VerifyDrafts"
+            event for event in receive_events if event["metadata"]["rpc"] == "VerifyDrafts"
         )
         assert verify_receive["metadata"]["peer"] == "target"
         assert verify_receive["metadata"]["accepted_token_count"] == 1

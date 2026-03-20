@@ -20,9 +20,9 @@ import json
 import logging
 import os
 import uuid
+from collections.abc import Mapping
 from datetime import datetime
 from pathlib import Path
-from typing import Mapping
 from typing import Any
 
 import grpc
@@ -107,11 +107,7 @@ def _capture_relevant_environment(
     """Capture the runtime environment that affects orchestrator experiments."""
     source = env or os.environ
     prefixes = ("SPECSPLIT_ORCH_", "SPECSPLIT_DRAFT_", "SPECSPLIT_TARGET_")
-    return {
-        key: source[key]
-        for key in sorted(source)
-        if key.startswith(prefixes)
-    }
+    return {key: source[key] for key in sorted(source) if key.startswith(prefixes)}
 
 
 def _default_telemetry_output_path(
@@ -263,8 +259,12 @@ class Orchestrator:
             # Prefer worker-reported vocab sizes from Ping over loading the
             # draft/target tokenizer paths locally. Those paths may not exist
             # on the orchestrator host even when the workers themselves are healthy.
-            draft_model_env = self._draft_worker_model_name or os.environ.get("SPECSPLIT_DRAFT_MODEL_NAME", "")
-            target_model_env = self._target_worker_model_name or os.environ.get("SPECSPLIT_TARGET_MODEL_NAME", "")
+            draft_model_env = self._draft_worker_model_name or os.environ.get(
+                "SPECSPLIT_DRAFT_MODEL_NAME", ""
+            )
+            target_model_env = self._target_worker_model_name or os.environ.get(
+                "SPECSPLIT_TARGET_MODEL_NAME", ""
+            )
 
             if draft_model_env and target_model_env and draft_model_env != target_model_env:
                 logger.info(
@@ -309,7 +309,9 @@ class Orchestrator:
         )
         draft_sw = Stopwatch().start()
         try:
-            draft_ping = self._draft_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
+            draft_ping = self._draft_stub.Ping(
+                spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s
+            )
             if inspect.isawaitable(draft_ping):
                 draft_ping = await draft_ping
         except Exception as exc:
@@ -348,7 +350,9 @@ class Orchestrator:
         )
         target_sw = Stopwatch().start()
         try:
-            target_ping = self._target_stub.Ping(spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s)
+            target_ping = self._target_stub.Ping(
+                spec_decoding_pb2.PingRequest(), timeout=self.config.timeout_s
+            )
             if inspect.isawaitable(target_ping):
                 target_ping = await target_ping
         except Exception as exc:
@@ -498,7 +502,7 @@ class Orchestrator:
                     target_stub=self._target_stub,
                     prompt_ids=prompt_ids,
                     config=self.config,
-                    session_id=session_id,
+                    session_id=session_id or "",
                     eos_token_id=eos_token_id,
                     vocab_bridge=self._vocab_bridge,
                     telemetry=self._telemetry,
@@ -660,10 +664,12 @@ class Orchestrator:
         output_text, _ = self.run_with_result_sync(prompt)
         return output_text
 
-    def chat_session(self) -> "ConversationSession":
+    def chat_session(self) -> ConversationSession:
         """Create a new stateful ConversationSession."""
         if not self.config.use_target_kv_cache:
-            logger.warning("Starting chat session with use_target_kv_cache=False. Performance will suffer.")
+            logger.warning(
+                "Starting chat session with use_target_kv_cache=False. Performance will suffer."
+            )
         self._ensure_tokenizer()
         return ConversationSession(self)
 
@@ -679,10 +685,13 @@ class Orchestrator:
             if candidate.suffix.lower() == ".json":
                 out_path = candidate
             else:
-                out_path = candidate / _default_telemetry_output_path(
-                    started_at=self._last_run_started_at,
-                    root=".",
-                ).name
+                out_path = (
+                    candidate
+                    / _default_telemetry_output_path(
+                        started_at=self._last_run_started_at,
+                        root=".",
+                    ).name
+                )
 
         out_path.parent.mkdir(parents=True, exist_ok=True)
         report = dict(self._last_run_report)
@@ -706,7 +715,7 @@ class ConversationSession:
         self._is_active: bool = True
         logger.info("Initializing ConversationSession %s", self.session_id)
 
-    def __enter__(self) -> "ConversationSession":
+    def __enter__(self) -> ConversationSession:
         return self
 
     def __exit__(self, exc_type: Any, exc_val: Any, exc_tb: Any) -> None:
@@ -739,7 +748,7 @@ class ConversationSession:
             )
 
             self.accumulated_token_ids.extend(result.output_tokens)
-            output_text = tokenizer.decode(result.output_tokens, skip_special_tokens=True)
+            output_text: str = str(tokenizer.decode(result.output_tokens, skip_special_tokens=True))
             return output_text
 
     def generate(self, user_prompt: str) -> str:
@@ -907,9 +916,7 @@ def main() -> None:
             draft_temp_for_lockstep = args.draft_temperature
         elif "SPECSPLIT_ORCH_DRAFT_TEMPERATURE" in os.environ:
             try:
-                draft_temp_for_lockstep = float(
-                    os.environ["SPECSPLIT_ORCH_DRAFT_TEMPERATURE"]
-                )
+                draft_temp_for_lockstep = float(os.environ["SPECSPLIT_ORCH_DRAFT_TEMPERATURE"])
             except ValueError:
                 draft_temp_for_lockstep = None
         elif "draft_temperature" in file_cfg:

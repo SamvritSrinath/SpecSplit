@@ -6,7 +6,7 @@ DynamicCache for causal language models used by SpecSplit.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import Any, cast
 
 import torch
 
@@ -28,7 +28,12 @@ def cache_to_legacy(
             return past_kv  # type: ignore[return-value]
 
     if hasattr(past_kv, "to_legacy_cache"):
-        return past_kv.to_legacy_cache()
+        # HF DynamicCache returns a tuple of (k, v) tensors; mypy can't
+        # express the runtime return type for this polymorphic attribute.
+        return cast(
+            tuple[tuple[torch.Tensor, torch.Tensor], ...],
+            past_kv.to_legacy_cache(),
+        )
 
     if hasattr(past_kv, "layers") and isinstance(past_kv.layers, (list, tuple)):
         return tuple(

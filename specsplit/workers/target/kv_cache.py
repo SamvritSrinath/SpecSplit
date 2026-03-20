@@ -109,7 +109,7 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             except TypeError:
                 super().__init__()  # type: ignore[misc]
         if not hasattr(self, "layers"):  # Fallback when transformers absent
-            self.layers = []
+            self.layers: list[Any] = []
         self.num_layers = num_layers
         self.num_heads = num_heads
         self.max_seq_len = max_seq_len
@@ -320,9 +320,7 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
 
         max_idx = max(keep_indices)
         if max_idx >= self._seq_len:
-            raise ValueError(
-                f"compact index {max_idx} >= current seq_len {self._seq_len}"
-            )
+            raise ValueError(f"compact index {max_idx} >= current seq_len {self._seq_len}")
 
         idx_tensor = torch.tensor(keep_indices, dtype=torch.long, device=self.device)
         new_len = len(keep_indices)
@@ -493,12 +491,12 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             except NotImplementedError:
                 k_slice[:, :, cache_position] = key_states
                 v_slice[:, :, cache_position] = value_states
-                
+
             # PR-3: Determine the intended sequence length dynamically.
             # We must return the full sliced tensor up to this length for ALL layers,
             # even though self._seq_len is only advanced on the final layer.
             intended_new_seq_len = max(self._seq_len, int(cache_position.max().item()) + 1)
-            
+
             if layer_idx == self.num_layers - 1:
                 self._seq_len = intended_new_seq_len
         else:
@@ -508,21 +506,21 @@ class StaticKVCache(HFCache if HFCache is not None else object):  # type: ignore
             end = start + new_len
             k_slice[:, :, start:end, :] = key_states
             v_slice[:, :, start:end, :] = value_states
-            
+
             intended_new_seq_len = end
-            
+
             if layer_idx == self.num_layers - 1:
                 self._seq_len = intended_new_seq_len
 
         # PR-3 Fix: Return a slice up to `intended_new_seq_len`, NOT `self._seq_len`.
-        # Why is this safe? On a cache hit during the first layer (layer_idx=0), 
-        # self._seq_len might still be the old length (or 0 if misconfigured), but the 
-        # pre-allocated buffers already contain the valid prefix data! Returning the 
-        # larger slice simply exposes the existing valid data + the newly written data 
+        # Why is this safe? On a cache hit during the first layer (layer_idx=0),
+        # self._seq_len might still be the old length (or 0 if misconfigured), but the
+        # pre-allocated buffers already contain the valid prefix data! Returning the
+        # larger slice simply exposes the existing valid data + the newly written data
         # to the attention operation for this specific layer.
         return (
-            k_slice[:, :, : intended_new_seq_len, :],
-            v_slice[:, :, : intended_new_seq_len, :],
+            k_slice[:, :, :intended_new_seq_len, :],
+            v_slice[:, :, :intended_new_seq_len, :],
         )
 
     def get_seq_length(self, layer_idx: int = 0) -> int:
@@ -558,26 +556,43 @@ class VirtualKVCache(StaticKVCache):
     writes use scatter. Compact becomes an O(length) pointer swap.
     """
 
-    def __init__(self, *args, **kwargs) -> None:
+    def __init__(self, *args: Any, **kwargs: Any) -> None:
         super().__init__(*args, **kwargs)
         self._l2p: list[int] = list(range(self.max_seq_len))
 
     def append(self, new_keys: torch.Tensor, new_values: torch.Tensor) -> None:
+        """Append new KV states at the end of the current logical sequence.
+
+        Updates the underlying physical buffers using the `_l2p` mapping and
+        advances `_seq_len`.
+        """
         new_len = new_keys.shape[3]
-        if new_keys.shape != (self.num_layers, self.batch_size, self.num_heads, new_len, self.head_dim):
+        if new_keys.shape != (
+            self.num_layers,
+            self.batch_size,
+            self.num_heads,
+            new_len,
+            self.head_dim,
+        ):
             raise ValueError("new_keys shape mismatch")
         end = self._seq_len + new_len
         if end > self.max_seq_len:
             raise ValueError("Exceeds max_seq_len")
 
         # Gather the physical indices for these logical positions
-        phys_indices = torch.tensor(self._l2p[self._seq_len:end], dtype=torch.long, device=self.device)
+        phys_indices = torch.tensor(
+            self._l2p[self._seq_len : end], dtype=torch.long, device=self.device
+        )
         self.key_cache.index_copy_(3, phys_indices, new_keys)
         self.value_cache.index_copy_(3, phys_indices, new_values)
 
         self._seq_len = end
 
     def compact(self, keep_indices: list[int]) -> None:
+        """Compact the logical sequence by remapping `_l2p` to `keep_indices`.
+
+        `keep_indices` are logical indices that remain active after compaction.
+        """
         if not keep_indices:
             self._seq_len = 0
             return
@@ -585,26 +600,30 @@ class VirtualKVCache(StaticKVCache):
         kept_physical = [self._l2p[i] for i in keep_indices]
         keep_set = set(keep_indices)
         freed_physical = [self._l2p[i] for i in range(self._seq_len) if i not in keep_set]
-        
+
         # logical length becomes len(keep_indices)
         # unaliasing the freed physical slots to the end
-        self._l2p[:len(kept_physical)] = kept_physical
+        self._l2p[: len(kept_physical)] = kept_physical
         self._l2p[len(kept_physical) : len(kept_physical) + len(freed_physical)] = freed_physical
-        
+
         old_len = self._seq_len
         self._seq_len = len(keep_indices)
         logger.debug("VirtualKVCache compact: %d → %d", old_len, self._seq_len)
 
     def get_kv_for_layer(self, layer_idx: int) -> tuple[torch.Tensor, torch.Tensor]:
+        """Return (key, value) slices for one layer at the current logical length."""
         if layer_idx < 0 or layer_idx >= self.num_layers:
             raise IndexError(f"layer_idx {layer_idx} out of range [0, {self.num_layers})")
-        phys_indices = torch.tensor(self._l2p[:self._seq_len], dtype=torch.long, device=self.device)
+        phys_indices = torch.tensor(
+            self._l2p[: self._seq_len], dtype=torch.long, device=self.device
+        )
         key = self.key_cache[layer_idx].index_select(2, phys_indices)
         value = self.value_cache[layer_idx].index_select(2, phys_indices)
         return key, value
 
     def get_physical_indices(self) -> torch.Tensor:
-        return torch.tensor(self._l2p[:self._seq_len], dtype=torch.long, device=self.device)
+        """Return physical buffer indices backing the current logical prefix."""
+        return torch.tensor(self._l2p[: self._seq_len], dtype=torch.long, device=self.device)
 
     def update(
         self,
@@ -613,6 +632,12 @@ class VirtualKVCache(StaticKVCache):
         layer_idx: int,
         cache_kwargs: dict[str, Any] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
+        """Update KV states for a layer and return active slices.
+
+        When `cache_kwargs["cache_position"]` is provided, writes at those
+        logical indices; otherwise it appends at the end of the current logical
+        sequence. The returned tensors correspond to the active prefix.
+        """
         new_len = key_states.shape[2]
         cache_kwargs = cache_kwargs or {}
         cache_position = cache_kwargs.get("cache_position")
@@ -625,12 +650,12 @@ class VirtualKVCache(StaticKVCache):
                 cache_position = torch.tensor(
                     cache_position, dtype=torch.long, device=key_states.device
                 )
-            
+
             # Map logical positions to physical indices
             physical_pos = torch.tensor(
-                [self._l2p[i] for i in cache_position.tolist()], 
-                dtype=torch.long, 
-                device=key_states.device
+                [self._l2p[i] for i in cache_position.tolist()],
+                dtype=torch.long,
+                device=key_states.device,
             )
 
             try:
@@ -639,25 +664,27 @@ class VirtualKVCache(StaticKVCache):
             except NotImplementedError:
                 k_slice[:, :, physical_pos] = key_states
                 v_slice[:, :, physical_pos] = value_states
-                
+
             intended_new_seq_len = max(self._seq_len, int(cache_position.max().item()) + 1)
             if layer_idx == self.num_layers - 1:
                 self._seq_len = intended_new_seq_len
         else:
             start = self._seq_len
             end = start + new_len
-            
+
             physical_pos = torch.tensor(self._l2p[start:end], dtype=torch.long, device=self.device)
 
             k_slice.index_copy_(2, physical_pos, key_states)
             v_slice.index_copy_(2, physical_pos, value_states)
-            
+
             intended_new_seq_len = end
             if layer_idx == self.num_layers - 1:
                 self._seq_len = intended_new_seq_len
 
         # Gather output using physical indices
-        active_phys_indices = torch.tensor(self._l2p[:intended_new_seq_len], dtype=torch.long, device=self.device)
+        active_phys_indices = torch.tensor(
+            self._l2p[:intended_new_seq_len], dtype=torch.long, device=self.device
+        )
         return (
             k_slice.index_select(2, active_phys_indices),
             v_slice.index_select(2, active_phys_indices),

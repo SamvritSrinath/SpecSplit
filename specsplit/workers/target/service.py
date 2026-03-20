@@ -14,8 +14,8 @@ from concurrent import futures
 import grpc
 import torch
 
-from specsplit.core.config import TargetWorkerConfig
 import specsplit.core.telemetry as telemetry
+from specsplit.core.config import TargetWorkerConfig
 from specsplit.core.telemetry import Stopwatch, TelemetryLogger
 from specsplit.proto import spec_decoding_pb2, spec_decoding_pb2_grpc
 from specsplit.workers.target.engine import CacheDesyncError, TargetEngine
@@ -137,13 +137,16 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             # engine no longer has the prefix. Using only the 2-3 delta
             # tokens as the full prompt would cause the 70B model to
             # verify against a nonsensical context, producing garbage.
-            if not prompt_ids and new_ids:
-                if not session_id or not self._engine.has_usable_session(session_id):
-                    context.abort(
-                        grpc.StatusCode.FAILED_PRECONDITION,
-                        "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
-                        "orchestrator must retry with full context",
-                    )
+            if (
+                not prompt_ids
+                and new_ids
+                and (not session_id or not self._engine.has_usable_session(session_id))
+            ):
+                context.abort(
+                    grpc.StatusCode.FAILED_PRECONDITION,
+                    "CACHE_EVICTED_DELTA_ONLY: session cache was evicted; "
+                    "orchestrator must retry with full context",
+                )
 
             if prompt_ids and len(prompt_ids) > self._config.max_prompt_tokens:
                 context.abort(
@@ -162,8 +165,13 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
 
             payload_bytes = request.ByteSize()
             with self._telemetry.span("proto_decode") as decode_span:
-                flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = _decode_proto_tree_direct(
-                    request.draft_tree, vocab_size, device, dtype
+                flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = (
+                    _decode_proto_tree_direct(
+                        list(request.draft_tree),
+                        vocab_size,
+                        device,
+                        dtype,
+                    )
                 )
             proto_decode_ms = decode_span.elapsed_ms
 
@@ -221,7 +229,9 @@ class TargetServiceServicer(spec_decoding_pb2_grpc.TargetServiceServicer):
             response = spec_decoding_pb2.VerifyResponse(
                 request_id=request.request_id,
                 accepted_token_ids=result.accepted_token_ids,
-                correction_token_id=result.correction_token_id if has_corr else 0,
+                correction_token_id=(
+                    int(result.correction_token_id) if result.correction_token_id is not None else 0
+                ),
                 has_correction=has_corr,
                 num_accepted=result.num_accepted,
                 session_id=session_id or "",

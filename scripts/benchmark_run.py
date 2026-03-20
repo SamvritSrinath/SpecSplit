@@ -32,7 +32,6 @@ Dataset format — one JSON object per line, at minimum a ``"prompt"`` field::
 from __future__ import annotations
 
 import argparse
-import asyncio
 import csv
 import json
 import logging
@@ -130,8 +129,7 @@ def _ttft_from_telemetry(telemetry: list[dict]) -> float:
         (
             s["wall_time_ms"]
             for s in telemetry
-            if s["operation"] == "overlapped_round"
-            and s["metadata"].get("round_idx") == 0
+            if s["operation"] == "overlapped_round" and s["metadata"].get("round_idx") == 0
         ),
         0.0,
     )
@@ -192,8 +190,7 @@ class BenchmarkOrchestrator:
         tpot_ms = result.wall_time_ms / max(generated_tokens, 1)
 
         per_round_acc_str = ";".join(
-            f"{r['round']}:{r['acceptance_rate']:.2f}"
-            for r in result.per_round_acceptance
+            f"{r['round']}:{r['acceptance_rate']:.2f}" for r in result.per_round_acceptance
         )
 
         metrics = RequestMetrics(

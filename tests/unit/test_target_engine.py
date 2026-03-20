@@ -153,7 +153,10 @@ def _make_mock_target_model(
             elif hasattr(past_key_values, "seq_len"):
                 cache_len += past_key_values.seq_len
         fake_kv = tuple(
-            (torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16), torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16))
+            (
+                torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16),
+                torch.zeros(batch, 4, cache_len, 8, dtype=torch.float16),
+            )
             for _ in range(2)
         )
 
@@ -201,9 +204,6 @@ def _make_mock_tokenizer() -> MagicMock:
     tokenizer.eos_token = "<eos>"
     tokenizer.__len__.return_value = 100
     return tokenizer
-
-
-
 
 
 # =========================================================================
@@ -427,12 +427,14 @@ class TestRollbackCache:
 class TestVerifyWithMockedModel:
     """Tests for verify_draft_tree using a mocked target model."""
 
-    def _make_tree(self, token_ids: list[int]) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
+    def _make_tree(
+        self, token_ids: list[int]
+    ) -> tuple[list[int], list[int], list[float], torch.Tensor | None]:
         """Build a linear chain of token nodes for testing."""
         if not token_ids:
             return [], [], [], None
         flat_token_ids = token_ids
-        topology_map = [-1] + list(range(len(token_ids) - 1))
+        topology_map = [-1, *list(range(len(token_ids) - 1))]
         flat_log_probs = [-0.1] * len(token_ids)
         flat_draft_probs_full = None
         return flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full
@@ -468,7 +470,9 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
@@ -506,7 +510,9 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
@@ -569,7 +575,9 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
@@ -601,16 +609,20 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         engine.verify_draft_tree(
-            prompt_ids=prompt_ids, 
+            prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
             topology_map=topology_map,
             flat_log_probs=flat_log_probs,
             flat_draft_probs_full=flat_draft_probs_full,
-            session_id="sess-A"
+            session_id="sess-A",
         )
-        flat_token_ids2, topology_map2, flat_log_probs2, flat_draft_probs_full2 = self._make_tree([20])
+        flat_token_ids2, topology_map2, flat_log_probs2, flat_draft_probs_full2 = self._make_tree(
+            [20]
+        )
         result = engine.verify_draft_tree(
             prompt_ids=[],
             flat_token_ids=flat_token_ids2,
@@ -717,7 +729,9 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
@@ -761,7 +775,9 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
             flat_token_ids=flat_token_ids,
@@ -797,7 +813,7 @@ class TestVerifyWithMockedModel:
         # Simulate a FULLY ACCEPTED path (diverged=False)
         mock_verify_stochastic.return_value = MagicMock(
             accepted_tokens=draft_ids,
-            bonus_token=draft_ids[-1], # The bug was that it returned the last accepted token 
+            bonus_token=draft_ids[-1],  # The bug was that it returned the last accepted token
             num_accepted=2,
             accepted_leaf_index=1,
             diverged=False,
@@ -810,13 +826,13 @@ class TestVerifyWithMockedModel:
         engine = TargetEngine(config=config)
         engine.load_model()
 
-        tree = self._make_tree(draft_ids)
-
-        # Before PR-2 fix, verify_draft_tree would see diverged=False 
+        # Before PR-2 fix, verify_draft_tree would see diverged=False
         # but would NOT clear the bonus token if it matched the last accepted token,
-        # leading to duplicate tokens outputted. 
+        # leading to duplicate tokens outputted.
 
-        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(draft_ids)
+        flat_token_ids, topology_map, flat_log_probs, flat_draft_probs_full = self._make_tree(
+            draft_ids
+        )
 
         result = engine.verify_draft_tree(
             prompt_ids=prompt_ids,
@@ -829,7 +845,7 @@ class TestVerifyWithMockedModel:
         )
 
         mock_verify_stochastic.assert_called_once()
-        # Ensure that TargetEngine deduplicated the bonus token because diverged=False 
+        # Ensure that TargetEngine deduplicated the bonus token because diverged=False
         # Since accept_tokens for the next state (base + leaf = 2 + 1 = 3) is index 3 -> 0
         assert result.num_accepted == 2
         assert result.accepted_token_ids == draft_ids

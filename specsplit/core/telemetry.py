@@ -30,9 +30,7 @@ def _now_iso() -> str:
     return datetime.now().astimezone().strftime("%Y-%m-%dT%H:%M:%S.%f%z")
 
 
-# =============================================================================
 # Stopwatch — high-precision timing
-# =============================================================================
 
 
 @dataclass
@@ -93,9 +91,7 @@ class Stopwatch:
         self.stop()
 
 
-# =============================================================================
 # TelemetryLogger — structured JSON spans
-# =============================================================================
 
 
 @dataclass
@@ -262,12 +258,12 @@ class TelemetryLogger:
             return
 
         # Collect all unique metadata keys
-        metadata_keys = set()
+        metadata_keys: set[str] = set()
         for span in self._spans:
             metadata_keys.update(span.metadata.keys())
         metadata_headers = sorted(list(metadata_keys))
 
-        headers = ["span_id", "operation", "wall_time_ms", "timestamp"] + metadata_headers
+        headers = ["span_id", "operation", "wall_time_ms", "timestamp", *metadata_headers]
 
         with out.open("w", newline="") as f:
             writer = csv.DictWriter(f, fieldnames=headers)
@@ -291,7 +287,7 @@ class TelemetryLogger:
 
         lines = [
             "# HELP specsplit_operation_duration_ms Duration of operations in milliseconds",
-            "# TYPE specsplit_operation_duration_ms summary"
+            "# TYPE specsplit_operation_duration_ms summary",
         ]
 
         for span in self._spans:
@@ -301,7 +297,7 @@ class TelemetryLogger:
                     labels.append(f'{k}="{v}"')
 
             label_str = ",".join(labels)
-            lines.append(f'specsplit_operation_duration_ms{{{label_str}}} {span.wall_time_ms:.4f}')
+            lines.append(f"specsplit_operation_duration_ms{{{label_str}}} {span.wall_time_ms:.4f}")
 
         out.write_text("\n".join(lines) + "\n")
         logger.info("Exported %d spans (Prometheus) to %s", len(self._spans), out)
