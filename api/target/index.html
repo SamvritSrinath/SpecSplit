@@ -1,0 +1,5302 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://samvritsrinath.github.io/SpecSplit/api/target/">
+      
+      
+        <link rel="prev" href="../draft/">
+      
+      
+        <link rel="next" href="../orchestrator/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Target Worker API - SpecSplit</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#target-worker-api" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="SpecSplit" class="md-header__button md-logo" aria-label="SpecSplit" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            SpecSplit
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Target Worker API
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/SamvritSrinath/SpecSplit" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="SpecSplit" class="md-nav__button md-logo" aria-label="SpecSplit" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    SpecSplit
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SamvritSrinath/SpecSplit" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project_guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../proto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../draft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Draft Worker API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Worker API
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Worker API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetengine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.CacheDesyncError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CacheDesyncError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.VerificationResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerificationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VerificationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.VerificationResult.acceptance_rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acceptance_rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.KVCacheState" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KVCacheState
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetEngine
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TargetEngine">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.active_sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        active_sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.is_loaded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        is_loaded
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.model_vocab_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        model_vocab_size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.end_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        end_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.get_or_create_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_or_create_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.has_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        has_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.has_usable_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        has_usable_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.load_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.purge_stale_sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        purge_stale_sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.rollback_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rollback_cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.verify_draft_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_draft_tree
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetkv_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.kv_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kv_cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="kv_cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache--performance-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache--tensor-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StaticKVCache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="StaticKVCache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.is_full" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        is_full
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.remaining_capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        remaining_capacity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.seq_len" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        seq_len
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        append
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.batch_select_indices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_select_indices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.compact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.crop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        crop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_all_kv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_all_kv
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_kv_for_layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_kv_for_layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_seq_length" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_seq_length
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.stack_hf_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stack_hf_cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VirtualKVCache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VirtualKVCache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        append
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.compact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.get_kv_for_layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_kv_for_layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.get_physical_indices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_physical_indices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargettree_attn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.tree_attn
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tree_attn
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="tree_attn">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn--terminology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Terminology
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn--example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn.build_tree_attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_tree_attention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn.bool_mask_to_float" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bool_mask_to_float
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetServiceServicer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TargetServiceServicer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.EndSession" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EndSession
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.Ping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.VerifyDrafts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerifyDrafts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serve
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Orchestrator API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/draft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Draft Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Orchestrator Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetengine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        engine
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.CacheDesyncError" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        CacheDesyncError
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.VerificationResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerificationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VerificationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.VerificationResult.acceptance_rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acceptance_rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.KVCacheState" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        KVCacheState
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetEngine
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TargetEngine">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.active_sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        active_sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.is_loaded" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        is_loaded
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.model_vocab_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        model_vocab_size
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.end_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        end_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.get_or_create_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_or_create_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.has_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        has_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.has_usable_session" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        has_usable_session
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.load_model" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_model
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.purge_stale_sessions" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        purge_stale_sessions
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.rollback_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rollback_cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.shutdown" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        shutdown
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.engine.TargetEngine.verify_draft_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_draft_tree
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetkv_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.kv_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        kv_cache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="kv_cache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache--performance-properties" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Performance Properties
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache--tensor-layout" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Tensor Layout
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        StaticKVCache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="StaticKVCache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.is_full" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        is_full
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.remaining_capacity" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        remaining_capacity
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.seq_len" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        seq_len
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        append
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.batch_select_indices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_select_indices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.compact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.crop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        crop
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_all_kv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_all_kv
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_kv_for_layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_kv_for_layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.get_seq_length" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_seq_length
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.rollback" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        rollback
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.stack_hf_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stack_hf_cache
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.StaticKVCache.update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VirtualKVCache
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VirtualKVCache">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.append" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        append
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.compact" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        compact
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.get_kv_for_layer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_kv_for_layer
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.get_physical_indices" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_physical_indices
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.kv_cache.VirtualKVCache.update" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        update
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargettree_attn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.tree_attn
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tree_attn
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="tree_attn">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn--terminology" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Terminology
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn--example" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Example
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn.build_tree_attention" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        build_tree_attention
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.tree_attn.bool_mask_to_float" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        bool_mask_to_float
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitworkerstargetservice" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.workers.target.service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        service
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetServiceServicer
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TargetServiceServicer">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.EndSession" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        EndSession
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.Ping" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Ping
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.TargetServiceServicer.VerifyDrafts" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerifyDrafts
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.workers.target.service.serve" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serve
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="target-worker-api">Target Worker API</h1>
+<h2 id="specsplitworkerstargetengine"><code>specsplit.workers.target.engine</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.workers.target.engine"></a>
+    <div class="doc doc-contents first">
+
+        <p>Target Engine — session-based KV-cached tree-attention verification.</p>
+<p>The <code>TargetEngine</code> wraps the large, accurate language model. Given a draft
+token tree from the Draft Worker, it performs a forward pass using tree
+attention to verify which draft tokens are accepted under the target
+distribution.</p>
+
+
+<details class="architecture-notes" open>
+  <summary>Architecture Notes</summary>
+  <ul>
+<li><strong>Session-based KV caching</strong>: Maintains a <code>dict[session_id, KVCacheState]</code>
+  mapping that stores pre-allocated :class:<code>StaticKVCache</code> per session.
+  This eliminates prompt recomputation and <code>torch.cat</code> reallocation
+  across verification rounds within the same generation session.</li>
+<li>After verification, <code>rollback_cache</code> uses <code>StaticKVCache.rollback()</code>
+  (O(1) pointer update) for linear chains, or <code>StaticKVCache.compact()</code>
+  for branching trees, to crop the cache to the accepted prefix.</li>
+<li>Uses greedy verification: for each position in the tree, if
+  <code>argmax(target_logits)</code> matches the drafted token, it is accepted.</li>
+</ul>
+</details>
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.engine.CacheDesyncError" class="doc doc-heading">
+            <code>CacheDesyncError</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="RuntimeError">RuntimeError</span></code></p>
+
+
+
+        <p>Raised when target cache length disagrees with orchestrator's expected_prefix_length.</p>
+<p>The orchestrator must retry with full prompt_token_ids to rebuild the cache.</p>
+
+
+
+
+
+
+
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.engine.VerificationResult" class="doc doc-heading">
+            <code>VerificationResult</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Result of verifying a draft tree against the target model.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.engine.VerificationResult.acceptance_rate" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">acceptance_rate</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Fraction of draft tokens accepted (0.0-1.0).</p>
+<p>Uses <code>num_draft_tokens</code> (the total draft candidates presented)
+as the denominator for a meaningful acceptance rate.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.engine.KVCacheState" class="doc doc-heading">
+            <code>KVCacheState</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Per-session KV cache state stored on the Target Worker.</p>
+<p>Wraps a :class:<code>StaticKVCache</code> providing O(1) rollback and
+zero-copy slice-assignment appends.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.workers.target.engine.KVCacheState.cache">cache</span></code></td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="VirtualKVCache (specsplit.workers.target.kv_cache.VirtualKVCache)" href="#specsplit.workers.target.kv_cache.VirtualKVCache">VirtualKVCache</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The pre-allocated static KV cache for this session,
+or <code>None</code> if the session was created before the model
+was loaded.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.workers.target.engine.KVCacheState.seq_len">seq_len</span></code></td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The current cached sequence length (number of tokens
+whose KV projections are stored).</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.workers.target.engine.KVCacheState.next_root_logit">next_root_logit</span></code></td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The logit predicting the token directly following the
+accepted sequence. Maintained to perfectly align the target model
+upon a cache hit without duplicate forwarding.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.engine.TargetEngine" class="doc doc-heading">
+            <code>TargetEngine</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Session-aware tree-attention verification engine for the Target Worker.</p>
+<p>Maintains a dictionary of <code>session_id → KVCacheState</code> to reuse KV
+projections across verification rounds within the same generation
+session.  After each verification, the cache is rolled back to the
+longest accepted prefix via <code>rollback_cache()</code>.</p>
+<p>The KV cache uses :class:<code>StaticKVCache</code> — a pre-allocated, pointer-
+based cache that provides O(1) rollback and zero-copy appends, compared
+to HuggingFace's default <code>DynamicCache</code> which requires <code>torch.cat</code>
+on every append.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>config</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="TargetWorkerConfig (specsplit.core.config.TargetWorkerConfig)" href="../core/#specsplit.core.config.TargetWorkerConfig">TargetWorkerConfig</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Target worker configuration (model name, device, etc.).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.active_sessions" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">active_sessions</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Number of active sessions with cached KV state.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.is_loaded" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">is_loaded</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Whether the model has been loaded.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.model_vocab_size" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">model_vocab_size</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Vocabulary size exposed by the loaded model or tokenizer.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.end_session" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">end_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Terminate a session and free its KV cache from memory.</p>
+<p>Thread-safe: acquires the session lock before destroying the cache
+to ensure no active <code>verify_draft_tree</code> thread is using the
+tensors being deleted (Issue 10).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>session_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The session to terminate.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>True if the session existed and was removed, False otherwise.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.get_or_create_session" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_or_create_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Retrieve an existing session cache or create a new one.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>session_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Unique identifier for the generation session.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="KVCacheState
+
+
+  
+      dataclass
+   (specsplit.workers.target.engine.KVCacheState)" href="#specsplit.workers.target.engine.KVCacheState">KVCacheState</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>(cache_state, cache_hit)</code> tuple.  <code>cache_hit</code> is True</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>if an existing cache was found.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.has_session" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">has_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return True if a session cache currently exists.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.has_usable_session" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">has_usable_session</span><span class="p">(</span><span class="n">session_id</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return True if a session exists and currently stores a usable prefix.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.load_model" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">load_model</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Load the target model and tokenizer via <code>AutoModelForCausalLM</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.purge_stale_sessions" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">purge_stale_sessions</span><span class="p">(</span><span class="n">ttl_seconds</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Remove sessions that have not been accessed within the TTL.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ttl_seconds</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Override the configured TTL (for testing).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of purged sessions.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.rollback_cache" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">rollback_cache</span><span class="p">(</span><span class="n">session_id</span><span class="p">,</span> <span class="n">accepted_depth</span><span class="p">,</span> <span class="n">accepted_tree_indices</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">prefix_length</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compact the KV cache to only the accepted prefix + accepted path.</p>
+<p>Uses :class:<code>VirtualKVCache</code> for O(1) rollback (linear chains)
+or <code>compact()</code> (branching trees with non-contiguous accepted
+positions).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>session_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The session whose cache to roll back.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>accepted_depth</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Total number of tokens in the accepted prefix
+(measured from the start of the full cached sequence).
+Used for simple O(1) rollback when <code>accepted_tree_indices</code>
+is None.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>accepted_tree_indices</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>] | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>BFS indices (0-based into the tree
+portion of the input) of the accepted path nodes, in
+order from root to leaf.  When provided, the cache is
+compacted to <code>prefix[:prefix_length] + tree[accepted_tree_indices]</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>prefix_length</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Length of the prompt/prefix portion of the
+cached sequence.  Only used when <code>accepted_tree_indices</code>
+is provided.</p>
+              </div>
+            </td>
+            <td>
+                  <code>0</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="KeyError">KeyError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the session does not exist.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If <code>accepted_depth</code> exceeds the current cache length.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.shutdown" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">shutdown</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Stop the background TTL GC thread.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.engine.TargetEngine.verify_draft_tree" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">verify_draft_tree</span><span class="p">(</span><span class="n">prompt_ids</span><span class="p">,</span> <span class="n">flat_token_ids</span><span class="p">,</span> <span class="n">topology_map</span><span class="p">,</span> <span class="n">flat_log_probs</span><span class="p">,</span> <span class="n">flat_draft_probs_full</span><span class="p">,</span> <span class="n">session_id</span><span class="o">=</span><span class="kc">None</span><span class="p">,</span> <span class="n">temperature</span><span class="o">=</span><span class="mf">0.0</span><span class="p">,</span> <span class="n">expected_prefix_length</span><span class="o">=</span><span class="mi">0</span><span class="p">,</span> <span class="n">new_token_ids</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Verify a draft token tree against the target model's distribution.</p>
+<p>When a <code>session_id</code> is provided, the engine reuses (or creates) a
+KV cache for that session.  After verification, the cache is
+automatically rolled back to the accepted prefix.</p>
+
+
+<details class="the-verification-pipeline" open>
+  <summary>The verification pipeline</summary>
+  <ol>
+<li>Build a tree-attention mask via <code>build_tree_attention()</code>.</li>
+<li>On cache hits, append any linear <code>new_token_ids</code> delta to the
+   session cache so the target prefix matches the draft context.</li>
+<li>Forward pass the tree tokens through the target model with the
+   current cached KV state.</li>
+<li>Run <code>verify_greedy_tree()</code> on the tree logits.</li>
+<li>Roll back the KV cache to the accepted prefix.</li>
+</ol>
+</details>
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>prompt_ids</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Full prompt/prefix token IDs when rebuilding from
+scratch after a miss or cache desync.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>flat_token_ids</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Flattened list of draft token IDs.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>topology_map</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Parent indices for each node in flat_token_ids.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>flat_log_probs</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="float">float</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Log probabilities for the draft tokens.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>flat_draft_probs_full</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Full draft probabilities if top-k is used.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>session_id</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional session ID for KV cache reuse.  If <code>None</code>,
+verification is fully stateless (no caching).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>new_token_ids</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>] | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Linear delta tokens to append to the cached prefix
+before tree verification. Used by the orchestrator to carry
+forward the previous round's bonus/correction token.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="VerificationResult
+
+
+  
+      dataclass
+   (specsplit.workers.target.engine.VerificationResult)" href="#specsplit.workers.target.engine.VerificationResult">VerificationResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>VerificationResult</code> with accepted tokens, an optional</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="VerificationResult
+
+
+  
+      dataclass
+   (specsplit.workers.target.engine.VerificationResult)" href="#specsplit.workers.target.engine.VerificationResult">VerificationResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>correction token, and a <code>cache_hit</code> flag.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitworkerstargetkv_cache"><code>specsplit.workers.target.kv_cache</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.workers.target.kv_cache"></a>
+    <div class="doc doc-contents first">
+
+        <p>Pre-allocated Static KV Cache for Disaggregated Speculative Decoding.</p>
+<p>Standard HuggingFace <code>past_key_values</code> uses a tuple of per-layer
+<code>(key, value)</code> tensors that grow via <code>torch.cat</code> at every decoding
+step.  This incurs reallocation + copy overhead that is unacceptable
+in a latency-sensitive speculative decoding pipeline.</p>
+<p>This module provides a :class:<code>StaticKVCache</code> that <strong>pre-allocates</strong> the
+full maximum-length buffer once at session start, and then uses simple
+slice assignment (<code>tensor[:, :, ptr:ptr+n, :] = new_data</code>) for
+appends and a single integer update for rollbacks.</p>
+<h3 id="specsplit.workers.target.kv_cache--performance-properties">Performance Properties</h3>
+<ul>
+<li><strong>Append</strong>: O(n) in the number of <em>new</em> tokens only (slice write,
+  no reallocation, no <code>torch.cat</code>).</li>
+<li><strong>Rollback</strong>: O(1) — updates the <code>seq_len</code> pointer.  Stale data
+  beyond the pointer is ignored and overwritten on the next append.</li>
+<li><strong>Memory</strong>: Fixed at ``2 * num_layers * batch * num_heads * max_seq_len</li>
+<li>head_dim * sizeof(dtype)`` bytes.  No dynamic growth.</li>
+</ul>
+<h3 id="specsplit.workers.target.kv_cache--tensor-layout">Tensor Layout</h3>
+<p>::</p>
+<pre><code>key_cache:   [num_layers, batch, num_heads, max_seq_len, head_dim]
+value_cache: [num_layers, batch, num_heads, max_seq_len, head_dim]
+</code></pre>
+<p>The <code>seq_len</code> pointer tracks how many valid positions are stored.
+Only <code>[:, :, :, :seq_len, :]</code> contains meaningful data.</p>
+<p>.. note::</p>
+<pre><code>This module is **not yet wired** into :class:`TargetEngine`, which
+currently uses HuggingFace's standard ``past_key_values`` tuple
+with slice-based rollback.  ``StaticKVCache`` is prepared as a
+future performance optimization to eliminate ``torch.cat``
+reallocation overhead in the verification hot path.
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.kv_cache.StaticKVCache" class="doc doc-heading">
+            <code>StaticKVCache</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="transformers.cache_utils.Cache">Cache</span> if <span title="transformers.cache_utils.Cache">Cache</span> is not None else <span title="object">object</span></code></p>
+
+
+
+        <p>Pre-allocated, pointer-based KV cache for a single session.</p>
+<p>Allocates fixed-size key and value buffers at initialization.
+Appends use slice assignment, and rollbacks update a single integer.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>num_layers</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of transformer layers (attention blocks).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>num_heads</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of attention heads per layer.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>max_seq_len</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Maximum sequence length to support.  The buffers
+are allocated to this size and never grow.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>head_dim</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dimension per attention head.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>batch_size</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Batch dimension (typically 1 for inference).</p>
+              </div>
+            </td>
+            <td>
+                  <code>1</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dtype</code>
+            </td>
+            <td>
+                  <code><span title="torch.dtype">dtype</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Tensor dtype (e.g., <code>torch.float16</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code><span title="torch.float16">float16</span></code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>device</code>
+            </td>
+            <td>
+                  <code><span title="torch.device">device</span> | <span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Torch device (e.g., <code>"cuda:0"</code>).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;cpu&#39;</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<pre><code>cache = StaticKVCache(
+    num_layers=32, num_heads=32,
+    max_seq_len=2048, head_dim=128,
+    dtype=torch.float16, device="cuda:0",
+)
+
+# After a forward pass produces new KV projections:
+# new_keys shape:   [num_layers, batch, num_heads, new_len, head_dim]
+# new_values shape: [num_layers, batch, num_heads, new_len, head_dim]
+cache.append(new_keys, new_values)
+
+# After verification, roll back to accepted prefix:
+cache.rollback(accepted_length=128)  # O(1)!
+
+# Get KV for a specific layer to pass into model:
+k, v = cache.get_kv_for_layer(layer_idx=0)
+# k shape: [batch, num_heads, seq_len, head_dim]
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.is_full" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">is_full</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Whether the cache has reached maximum capacity.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.remaining_capacity" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">remaining_capacity</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Number of additional positions that can be appended.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.seq_len" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">seq_len</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Number of valid positions currently stored in the cache.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.append" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">append</span><span class="p">(</span><span class="n">new_keys</span><span class="p">,</span> <span class="n">new_values</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Insert new KV projections at the current pointer position.</p>
+<p>Uses slice assignment (<code>cache[:, :, :, ptr:ptr+n, :] = data</code>)
+which is an in-place write — <strong>no</strong> <code>torch.cat</code>, <strong>no</strong>
+<code>.clone()</code>, <strong>no</strong> reallocation.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>new_keys</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>New key projections.
+Shape: <code>[num_layers, batch, num_heads, new_len, head_dim]</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>new_values</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>New value projections.
+Shape: <code>[num_layers, batch, num_heads, new_len, head_dim]</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the new tokens would exceed <code>max_seq_len</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If tensor shapes don't match the cache configuration.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.batch_select_indices" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">batch_select_indices</span><span class="p">(</span><span class="n">indices</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Keep only specified positions (Cache interface, maps to compact).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.compact" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">compact</span><span class="p">(</span><span class="n">keep_indices</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Re-order the cache to keep only specified positions.</p>
+<p>Used for branching tree KV cache compaction where the accepted
+path contains non-contiguous BFS positions.  Unlike
+:meth:<code>rollback</code>, this performs actual tensor operations
+(<code>torch.index_select</code>), but it is still far cheaper than
+re-computing the full KV cache from scratch.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>keep_indices</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Ordered list of cache positions to retain.
+Must be valid indices in <code>[0, seq_len)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If any index is out of range.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.crop" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">crop</span><span class="p">(</span><span class="n">max_length</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Crop cache to max_length (Cache interface, maps to rollback).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.get_all_kv" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_all_kv</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get valid (key, value) pairs for ALL layers as a HF-compatible tuple.</p>
+<p>This format is compatible with HuggingFace's <code>past_key_values</code>
+argument: a tuple of <code>(key, value)</code> pairs per layer.</p>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>, <span title="torch.Tensor">Tensor</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A tuple of length <code>num_layers</code>, where each element is</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code>...</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>(key, value)</code> with shape <code>[batch, num_heads, seq_len, head_dim]</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<details class="note" open>
+  <summary>Note</summary>
+  <p>The returned tensors are <strong>views</strong> into the pre-allocated cache.
+Do not modify them in-place unless you intend to update the cache.</p>
+</details>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.get_kv_for_layer" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_kv_for_layer</span><span class="p">(</span><span class="n">layer_idx</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Get the valid (key, value) tensors for a specific layer.</p>
+<p>Returns views (not copies) sliced to the current <code>seq_len</code>.
+These are suitable for passing directly into a transformer layer's
+attention computation.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>layer_idx</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Index of the transformer layer (0-based).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>(key, value)</code> tuple of tensors, each with shape</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>[batch, num_heads, seq_len, head_dim]</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="IndexError">IndexError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If <code>layer_idx</code> is out of range.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.get_seq_length" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_seq_length</span><span class="p">(</span><span class="n">layer_idx</span><span class="o">=</span><span class="mi">0</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the number of cached positions (Cache interface).</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.reset" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">reset</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Reset the cache to empty (seq_len = 0).</p>
+<p>Like :meth:<code>rollback</code>, this is O(1) — it only resets the pointer.
+The pre-allocated buffers remain in GPU memory for reuse.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.rollback" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">rollback</span><span class="p">(</span><span class="n">accepted_length</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Roll back the cache to a given accepted prefix length.</p>
+<p><strong>This is an O(1) operation.</strong>  It simply moves the <code>seq_len</code>
+pointer backwards.  No tensor data is copied or zeroed.  Stale
+data beyond the new pointer is harmless — it will be overwritten
+by the next :meth:<code>append</code> call, and it is never read because
+all consumers use <code>[:, :, :, :seq_len, :]</code> slices.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>accepted_length</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The number of positions to keep (measured
+from the start of the sequence).  Must satisfy
+<code>0 &lt;= accepted_length &lt;= seq_len</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If <code>accepted_length</code> is negative or exceeds
+the current <code>seq_len</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.stack_hf_cache" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">stack_hf_cache</span><span class="p">(</span><span class="n">past_key_values</span><span class="p">)</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-staticmethod"><code>staticmethod</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert HuggingFace's cache format to 5D tensors for <code>append()</code>.</p>
+<p>HuggingFace models output <code>past_key_values</code> as::</p>
+<pre><code>tuple[  # num_layers
+    tuple[
+        Tensor[batch, heads, seq, head_dim],  # keys
+        Tensor[batch, heads, seq, head_dim],  # values
+    ],
+    ...
+]
+</code></pre>
+<p>This method stacks them into unified 5D tensors::</p>
+<pre><code>keys:   [num_layers, batch, heads, seq, head_dim]
+values: [num_layers, batch, heads, seq, head_dim]
+</code></pre>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>past_key_values</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>, <span title="torch.Tensor">Tensor</span>], ...]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>HuggingFace <code>past_key_values</code> tuple.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>(stacked_keys, stacked_values)</code> tuple of 5D tensors</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>suitable for passing to <code>StaticKVCache.append()</code>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.StaticKVCache.update" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">update</span><span class="p">(</span><span class="n">key_states</span><span class="p">,</span> <span class="n">value_states</span><span class="p">,</span> <span class="n">layer_idx</span><span class="p">,</span> <span class="n">cache_kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Update the cache in-place. Called by HuggingFace attention layers.</p>
+<p>Writes key/value states directly into the pre-allocated buffers via
+slice assignment or index_copy_. No torch.cat, no reallocation.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>key_states</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>[batch, num_heads, new_len, head_dim]</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>value_states</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Same shape.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>layer_idx</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Layer index.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>cache_kwargs</code>
+            </td>
+            <td>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="typing.Any">Any</span>] | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>May contain "cache_position" tensor of write indices.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>, <span title="torch.Tensor">Tensor</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>(keys, values) for this layer, shape [batch, num_heads, seq_len, head_dim].</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.kv_cache.VirtualKVCache" class="doc doc-heading">
+            <code>VirtualKVCache</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><a class="autorefs autorefs-internal" title="StaticKVCache (specsplit.workers.target.kv_cache.StaticKVCache)" href="#specsplit.workers.target.kv_cache.StaticKVCache">StaticKVCache</a></code></p>
+
+
+
+        <p>Wraps StaticKVCache with a virtual index layer.</p>
+<p>Instead of physically compacting the buffer on branching rollback,
+maintains a <code>_l2p</code> mapping (logical-to-physical). Reads use gathered indices;
+writes use scatter. Compact becomes an O(length) pointer swap.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.VirtualKVCache.append" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">append</span><span class="p">(</span><span class="n">new_keys</span><span class="p">,</span> <span class="n">new_values</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Append new KV states at the end of the current logical sequence.</p>
+<p>Updates the underlying physical buffers using the <code>_l2p</code> mapping and
+advances <code>_seq_len</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.VirtualKVCache.compact" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">compact</span><span class="p">(</span><span class="n">keep_indices</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Compact the logical sequence by remapping <code>_l2p</code> to <code>keep_indices</code>.</p>
+<p><code>keep_indices</code> are logical indices that remain active after compaction.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.VirtualKVCache.get_kv_for_layer" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_kv_for_layer</span><span class="p">(</span><span class="n">layer_idx</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return (key, value) slices for one layer at the current logical length.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.VirtualKVCache.get_physical_indices" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_physical_indices</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return physical buffer indices backing the current logical prefix.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.kv_cache.VirtualKVCache.update" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">update</span><span class="p">(</span><span class="n">key_states</span><span class="p">,</span> <span class="n">value_states</span><span class="p">,</span> <span class="n">layer_idx</span><span class="p">,</span> <span class="n">cache_kwargs</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Update KV states for a layer and return active slices.</p>
+<p>When <code>cache_kwargs["cache_position"]</code> is provided, writes at those
+logical indices; otherwise it appends at the end of the current logical
+sequence. The returned tensors correspond to the active prefix.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitworkerstargettree_attn"><code>specsplit.workers.target.tree_attn</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.workers.target.tree_attn"></a>
+    <div class="doc doc-contents first">
+
+        <p>Custom Tree Attention Masking for Disaggregated Speculative Decoding.</p>
+<p>When the Target Worker receives a flat list of draft token IDs and a
+"topology map" (a list of parent indices), it must verify the entire tree
+in a <strong>single</strong> forward pass.  This module builds the custom 2D boolean
+attention mask and 1D <code>position_ids</code> tensor required to achieve that.</p>
+<h3 id="specsplit.workers.target.tree_attn--terminology">Terminology</h3>
+<ul>
+<li><strong>Topology map</strong>: A list of length <code>num_tree_nodes</code> where
+  <code>topology_map[i]</code> is the <em>local</em> index (0-based into the tree nodes
+  array) of node <code>i</code>'s parent, or <code>-1</code> if node <code>i</code> is a root of
+  the tree.  This is the standard flat-tree representation used in
+  SpecInfer / Medusa / Eagle.</li>
+<li><strong>Prefix</strong>: The already-processed prompt tokens whose KV projections
+  live in the KV cache.  Every tree node attends to the full prefix.</li>
+<li><strong>Total sequence</strong>: <code>[prefix tokens | tree tokens]</code> concatenated.</li>
+</ul>
+<p>Attention Rules
+~~~~~~~~~~~~~~~
+A tree node at position <code>j</code> (0-indexed within the tree) is allowed to
+attend to:
+    1. <strong>All prefix tokens</strong> (positions <code>0 .. prefix_length-1</code>).
+    2. <strong>Itself</strong>.
+    3. <strong>All of its ancestors</strong> in the tree (following parent pointers up).</p>
+<p>It must <strong>NOT</strong> attend to siblings, cousins, or any other branch.</p>
+<p>Position ID Rules
+~~~~~~~~~~~~~~~~~
+Siblings at the same depth in the tree represent <em>alternative</em>
+continuations at the same logical decoding step, so they share the same
+<code>position_id</code>.  Specifically:
+    - Prefix positions: <code>0, 1, ..., prefix_length - 1</code>
+    - Tree node positions: <code>prefix_length + depth_of_node</code></p>
+<h3 id="specsplit.workers.target.tree_attn--example">Example</h3>
+<p>Consider a tree with topology_map = [-1, 0, 0, 1, 2] and prefix_length = 3::</p>
+<pre><code>    Prefix: [p0, p1, p2]
+    Tree:       t0
+               /    \
+             t1      t2
+             |       |
+             t3      t4
+
+Depths:  t0=0, t1=1, t2=1, t3=2, t4=2
+Position IDs: [0,1,2,  3,4,4,5,5]
+               prefix   tree
+
+Attention mask (tree portion only — prefix columns are all True):
+    t0 attends to: prefix + t0
+    t1 attends to: prefix + t0, t1
+    t2 attends to: prefix + t0, t2
+    t3 attends to: prefix + t0, t1, t3
+    t4 attends to: prefix + t0, t2, t4
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.workers.target.tree_attn.build_tree_attention" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">build_tree_attention</span><span class="p">(</span><span class="n">topology_map</span><span class="p">,</span> <span class="n">prefix_length</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cpu&#39;</span><span class="p">,</span> <span class="n">tree_rows_only</span><span class="o">=</span><span class="kc">False</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Build a causal tree-attention mask and position IDs tensor.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>topology_map</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List of parent indices for each tree node.
+<code>topology_map[i] = j</code> means node <code>i</code>'s parent is node <code>j</code>.
+<code>topology_map[i] = -1</code> means node <code>i</code> is a root.
+Length: <code>num_tree_nodes</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>prefix_length</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Number of prefix tokens already in the KV cache.
+These positions are always attended to by every tree node.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>device</code>
+            </td>
+            <td>
+                  <code><span title="torch.device">device</span> | <span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Torch device for the output tensors.</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;cpu&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>tree_rows_only</code>
+            </td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If True, allocate only [num_tree_nodes, total_len] mask
+(for cache hit when only tree rows are needed). Avoids O(total_len²)
+allocation when 99%+ would be discarded by slicing.</p>
+              </div>
+            </td>
+            <td>
+                  <code>False</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A tuple <code>(attention_mask, position_ids)</code> where:</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <ul>
+<li><code>attention_mask</code>: <code>torch.bool</code> tensor of shape
+<code>[1, 1, Q, total_len]</code> with Q = num_tree_nodes if tree_rows_only
+else total_len. <code>True</code> = allowed to attend.</li>
+</ul>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>, <span title="torch.Tensor">Tensor</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <ul>
+<li><code>position_ids</code>: <code>torch.long</code> tensor of shape <code>[1, Q]</code>.</li>
+</ul>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If <code>topology_map</code> contains an out-of-range parent
+index or forms a cycle.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.workers.target.tree_attn.bool_mask_to_float" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">bool_mask_to_float</span><span class="p">(</span><span class="n">mask</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">float16</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a boolean attention mask to a float mask with <code>-inf</code> masking.</p>
+<p>Some model backends (e.g., Flash Attention v2) expect the attention
+mask as a float tensor where masked positions are <code>-inf</code> and
+attended positions are <code>0.0</code>.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>mask</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Boolean mask of shape <code>[1, 1, Q, K]</code>.
+<code>True</code> = attend, <code>False</code> = mask out.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dtype</code>
+            </td>
+            <td>
+                  <code><span title="torch.dtype">dtype</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Output dtype (should match model precision).</p>
+              </div>
+            </td>
+            <td>
+                  <code><span title="torch.float16">float16</span></code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Float mask of the same shape, with <code>0.0</code> for attended and</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p><code>-inf</code> for masked positions.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitworkerstargetservice"><code>specsplit.workers.target.service</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.workers.target.service"></a>
+    <div class="doc doc-contents first">
+
+        <p>Target Worker gRPC service bindings.</p>
+<p>Exposes the <code>TargetService</code> gRPC server that wraps the <code>TargetEngine</code>
+for network-accessible tree-attention verification with session-based
+KV caching.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.workers.target.service.TargetServiceServicer" class="doc doc-heading">
+            <code>TargetServiceServicer</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="specsplit.proto.spec_decoding_pb2_grpc.TargetServiceServicer">TargetServiceServicer</span></code></p>
+
+
+
+        <p>gRPC servicer implementing the <code>TargetService</code> RPC interface.</p>
+<p>Handles <code>VerifyDrafts</code> (with session-based KV caching) and
+<code>EndSession</code> (for explicit cache cleanup).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>engine</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="TargetEngine (specsplit.workers.target.engine.TargetEngine)" href="#specsplit.workers.target.engine.TargetEngine">TargetEngine</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The target verification engine.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>config</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="TargetWorkerConfig (specsplit.core.config.TargetWorkerConfig)" href="../core/#specsplit.core.config.TargetWorkerConfig">TargetWorkerConfig</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Target worker config (for request size limits).</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>telemetry</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="TelemetryLogger (specsplit.core.telemetry.TelemetryLogger)" href="../core/#specsplit.core.telemetry.TelemetryLogger">TelemetryLogger</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional telemetry logger for span collection.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.service.TargetServiceServicer.EndSession" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">EndSession</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Handle an <code>EndSession</code> RPC — release a session's KV cache.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>request</code>
+            </td>
+            <td>
+                  <code><span title="specsplit.proto.spec_decoding_pb2.EndSessionRequest">EndSessionRequest</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>An <code>EndSessionRequest</code> protobuf message.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>context</code>
+            </td>
+            <td>
+                  <code><span title="grpc.ServicerContext">ServicerContext</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>gRPC server context.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="specsplit.proto.spec_decoding_pb2.EndSessionResponse">EndSessionResponse</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>An <code>EndSessionResponse</code> protobuf message.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.service.TargetServiceServicer.Ping" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">Ping</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Health check endpoint.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.workers.target.service.TargetServiceServicer.VerifyDrafts" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">VerifyDrafts</span><span class="p">(</span><span class="n">request</span><span class="p">,</span> <span class="n">context</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Handle a <code>VerifyDrafts</code> RPC call with optional session KV caching.</p>
+<p>If <code>request.session_id</code> is non-empty, the engine reuses (or creates)
+a KV cache for that session, and automatically rolls it back to the
+accepted prefix after verification.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>request</code>
+            </td>
+            <td>
+                  <code><span title="specsplit.proto.spec_decoding_pb2.VerifyRequest">VerifyRequest</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>VerifyRequest</code> protobuf message.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>context</code>
+            </td>
+            <td>
+                  <code><span title="grpc.ServicerContext">ServicerContext</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>gRPC server context.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="specsplit.proto.spec_decoding_pb2.VerifyResponse">VerifyResponse</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A <code>VerifyResponse</code> protobuf message with verification results.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.workers.target.service.serve" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">serve</span><span class="p">(</span><span class="n">config</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Start the Target Worker gRPC server.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>config</code>
+            </td>
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="TargetWorkerConfig (specsplit.core.config.TargetWorkerConfig)" href="../core/#specsplit.core.config.TargetWorkerConfig">TargetWorkerConfig</a> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional configuration override.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "navigation.sections"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>

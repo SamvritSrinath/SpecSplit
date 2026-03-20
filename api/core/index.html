@@ -1,0 +1,4509 @@
+
+<!doctype html>
+<html lang="en" class="no-js">
+  <head>
+    
+      <meta charset="utf-8">
+      <meta name="viewport" content="width=device-width,initial-scale=1">
+      
+      
+      
+        <link rel="canonical" href="https://samvritsrinath.github.io/SpecSplit/api/core/">
+      
+      
+        <link rel="prev" href="../">
+      
+      
+        <link rel="next" href="../draft/">
+      
+      
+        
+      
+      
+      <link rel="icon" href="../../assets/images/favicon.png">
+      <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.7.6">
+    
+    
+      
+        <title>Core Modules - SpecSplit</title>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/stylesheets/main.484c7ddc.min.css">
+      
+      
+
+
+    
+    
+      
+    
+    
+      
+        
+        
+        <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+        <link rel="stylesheet" href="https://fonts.googleapis.com/css?family=Roboto:300,300i,400,400i,700,700i%7CRoboto+Mono:400,400i,700,700i&display=fallback">
+        <style>:root{--md-text-font:"Roboto";--md-code-font:"Roboto Mono"}</style>
+      
+    
+    
+      <link rel="stylesheet" href="../../assets/_mkdocstrings.css">
+    
+    <script>__md_scope=new URL("../..",location),__md_hash=e=>[...e].reduce(((e,_)=>(e<<5)-e+_.charCodeAt(0)),0),__md_get=(e,_=localStorage,t=__md_scope)=>JSON.parse(_.getItem(t.pathname+"."+e)),__md_set=(e,_,t=localStorage,a=__md_scope)=>{try{t.setItem(a.pathname+"."+e,JSON.stringify(_))}catch(e){}}</script>
+    
+      
+
+    
+    
+  </head>
+  
+  
+    <body dir="ltr">
+  
+    
+    <input class="md-toggle" data-md-toggle="drawer" type="checkbox" id="__drawer" autocomplete="off">
+    <input class="md-toggle" data-md-toggle="search" type="checkbox" id="__search" autocomplete="off">
+    <label class="md-overlay" for="__drawer"></label>
+    <div data-md-component="skip">
+      
+        
+        <a href="#core-modules" class="md-skip">
+          Skip to content
+        </a>
+      
+    </div>
+    <div data-md-component="announce">
+      
+    </div>
+    
+    
+      
+
+  
+
+<header class="md-header md-header--shadow" data-md-component="header">
+  <nav class="md-header__inner md-grid" aria-label="Header">
+    <a href="../.." title="SpecSplit" class="md-header__button md-logo" aria-label="SpecSplit" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    <label class="md-header__button md-icon" for="__drawer">
+      
+      <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M3 6h18v2H3zm0 5h18v2H3zm0 5h18v2H3z"/></svg>
+    </label>
+    <div class="md-header__title" data-md-component="header-title">
+      <div class="md-header__ellipsis">
+        <div class="md-header__topic">
+          <span class="md-ellipsis">
+            SpecSplit
+          </span>
+        </div>
+        <div class="md-header__topic" data-md-component="header-topic">
+          <span class="md-ellipsis">
+            
+              Core Modules
+            
+          </span>
+        </div>
+      </div>
+    </div>
+    
+    
+      <script>var palette=__md_get("__palette");if(palette&&palette.color){if("(prefers-color-scheme)"===palette.color.media){var media=matchMedia("(prefers-color-scheme: light)"),input=document.querySelector(media.matches?"[data-md-color-media='(prefers-color-scheme: light)']":"[data-md-color-media='(prefers-color-scheme: dark)']");palette.color.media=input.getAttribute("data-md-color-media"),palette.color.scheme=input.getAttribute("data-md-color-scheme"),palette.color.primary=input.getAttribute("data-md-color-primary"),palette.color.accent=input.getAttribute("data-md-color-accent")}for(var[key,value]of Object.entries(palette.color))document.body.setAttribute("data-md-color-"+key,value)}</script>
+    
+    
+    
+      
+      
+        <label class="md-header__button md-icon" for="__search">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        </label>
+        <div class="md-search" data-md-component="search" role="dialog">
+  <label class="md-search__overlay" for="__search"></label>
+  <div class="md-search__inner" role="search">
+    <form class="md-search__form" name="search">
+      <input type="text" class="md-search__input" name="query" aria-label="Search" placeholder="Search" autocapitalize="off" autocorrect="off" autocomplete="off" spellcheck="false" data-md-component="search-query" required>
+      <label class="md-search__icon md-icon" for="__search">
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M9.5 3A6.5 6.5 0 0 1 16 9.5c0 1.61-.59 3.09-1.56 4.23l.27.27h.79l5 5-1.5 1.5-5-5v-.79l-.27-.27A6.52 6.52 0 0 1 9.5 16 6.5 6.5 0 0 1 3 9.5 6.5 6.5 0 0 1 9.5 3m0 2C7 5 5 7 5 9.5S7 14 9.5 14 14 12 14 9.5 12 5 9.5 5"/></svg>
+        
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M20 11v2H8l5.5 5.5-1.42 1.42L4.16 12l7.92-7.92L13.5 5.5 8 11z"/></svg>
+      </label>
+      <nav class="md-search__options" aria-label="Search">
+        
+        <button type="reset" class="md-search__icon md-icon" title="Clear" aria-label="Clear" tabindex="-1">
+          
+          <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M19 6.41 17.59 5 12 10.59 6.41 5 5 6.41 10.59 12 5 17.59 6.41 19 12 13.41 17.59 19 19 17.59 13.41 12z"/></svg>
+        </button>
+      </nav>
+      
+    </form>
+    <div class="md-search__output">
+      <div class="md-search__scrollwrap" tabindex="0" data-md-scrollfix>
+        <div class="md-search-result" data-md-component="search-result">
+          <div class="md-search-result__meta">
+            Initializing search
+          </div>
+          <ol class="md-search-result__list" role="presentation"></ol>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
+      
+    
+    
+      <div class="md-header__source">
+        <a href="https://github.com/SamvritSrinath/SpecSplit" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+      </div>
+    
+  </nav>
+  
+</header>
+    
+    <div class="md-container" data-md-component="container">
+      
+      
+        
+          
+        
+      
+      <main class="md-main" data-md-component="main">
+        <div class="md-main__inner md-grid">
+          
+            
+              
+              <div class="md-sidebar md-sidebar--primary" data-md-component="sidebar" data-md-type="navigation" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+
+
+<nav class="md-nav md-nav--primary" aria-label="Navigation" data-md-level="0">
+  <label class="md-nav__title" for="__drawer">
+    <a href="../.." title="SpecSplit" class="md-nav__button md-logo" aria-label="SpecSplit" data-md-component="logo">
+      
+  
+  <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24"><path d="M12 8a3 3 0 0 0 3-3 3 3 0 0 0-3-3 3 3 0 0 0-3 3 3 3 0 0 0 3 3m0 3.54C9.64 9.35 6.5 8 3 8v11c3.5 0 6.64 1.35 9 3.54 2.36-2.19 5.5-3.54 9-3.54V8c-3.5 0-6.64 1.35-9 3.54"/></svg>
+
+    </a>
+    SpecSplit
+  </label>
+  
+    <div class="md-nav__source">
+      <a href="https://github.com/SamvritSrinath/SpecSplit" title="Go to repository" class="md-source" data-md-component="source">
+  <div class="md-source__icon md-icon">
+    
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 448 512"><!--! Font Awesome Free 7.1.0 by @fontawesome - https://fontawesome.com License - https://fontawesome.com/license/free (Icons: CC BY 4.0, Fonts: SIL OFL 1.1, Code: MIT License) Copyright 2025 Fonticons, Inc.--><path d="M439.6 236.1 244 40.5c-5.4-5.5-12.8-8.5-20.4-8.5s-15 3-20.4 8.4L162.5 81l51.5 51.5c27.1-9.1 52.7 16.8 43.4 43.7l49.7 49.7c34.2-11.8 61.2 31 35.5 56.7-26.5 26.5-70.2-2.9-56-37.3L240.3 199v121.9c25.3 12.5 22.3 41.8 9.1 55-6.4 6.4-15.2 10.1-24.3 10.1s-17.8-3.6-24.3-10.1c-17.6-17.6-11.1-46.9 11.2-56v-123c-20.8-8.5-24.6-30.7-18.6-45L142.6 101 8.5 235.1C3 240.6 0 247.9 0 255.5s3 15 8.5 20.4l195.6 195.7c5.4 5.4 12.7 8.4 20.4 8.4s15-3 20.4-8.4l194.7-194.7c5.4-5.4 8.4-12.8 8.4-20.4s-3-15-8.4-20.4"/></svg>
+  </div>
+  <div class="md-source__repository">
+    GitHub
+  </div>
+</a>
+    </div>
+  
+  <ul class="md-nav__list" data-md-scrollfix>
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../.." class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Home
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../architecture/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Architecture
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../project_guide/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Project Guide
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../experiments/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Experiments
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../testing/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Testing
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../proto/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Protocol
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/core/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+    
+  
+  
+  
+    
+    
+    
+    
+      
+        
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--active md-nav__item--section md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_8" checked>
+        
+          
+          <label class="md-nav__link" for="__nav_8" id="__nav_8_label" tabindex="">
+            
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    API Reference
+  
+
+    
+  </span>
+  
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_8_label" aria-expanded="true">
+          <label class="md-nav__title" for="__nav_8">
+            <span class="md-nav__icon md-icon"></span>
+            
+  
+    API Reference
+  
+
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Overview
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+    
+  
+  
+  
+    <li class="md-nav__item md-nav__item--active">
+      
+      <input class="md-nav__toggle md-toggle" type="checkbox" id="__toc">
+      
+      
+        
+      
+      
+        <label class="md-nav__link md-nav__link--active" for="__toc">
+          
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Modules
+  
+
+    
+  </span>
+  
+  
+
+          <span class="md-nav__icon md-icon"></span>
+        </label>
+      
+      <a href="./" class="md-nav__link md-nav__link--active">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Core Modules
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+      
+        
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.DraftWorkerConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DraftWorkerConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.TargetWorkerConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetWorkerConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.OrchestratorConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OrchestratorConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.load_config_file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_config_file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoretelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stopwatch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stopwatch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_ms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_ms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_ns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_ns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_s
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetrySpan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetrySpan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetrySpan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetrySpan.to_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_dict
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetryEvent
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetryEvent">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryEvent.to_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_dict
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetryLogger
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetryLogger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export_csv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export_csv
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export_prometheus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export_prometheus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.record_event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        record_event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.record_span" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        record_span
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.span" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        span
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.get_current_context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_current_context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreverification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification--greedy-verification-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Greedy Verification Algorithm
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerificationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VerificationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult.acceptance_rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acceptance_rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult.num_accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        num_accepted
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.verify_greedy_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_greedy_tree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.verify_stochastic_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_stochastic_tree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoremodel_loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.model_loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        model_loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_checkpoint_dtype" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_checkpoint_dtype
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_model_config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_model_vocab_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_vocab_size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcorecache_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.cache_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.cache_to_legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_to_legacy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.cache_supports_crop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_supports_crop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.crop_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        crop_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.batch_model_caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_model_caches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.slice_batch_item_from_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        slice_batch_item_from_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.legacy_to_dynamic_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        legacy_to_dynamic_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreserialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.serialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.tensor_to_token_ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tensor_to_token_ids
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.token_ids_to_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token_ids_to_tensor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.logits_to_probs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logits_to_probs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+      
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../draft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Draft Worker API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Worker API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Orchestrator API
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/draft/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Draft Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/target/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Target Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../specsplit/workers/orchestrator/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Orchestrator Worker
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../benchmarks/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Benchmarks
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../tests/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Tests
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../../platforms/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    
+  
+    Platforms
+  
+
+    
+  </span>
+  
+  
+
+      </a>
+    </li>
+  
+
+    
+  </ul>
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+            
+              
+              <div class="md-sidebar md-sidebar--secondary" data-md-component="sidebar" data-md-type="toc" >
+                <div class="md-sidebar__scrollwrap">
+                  <div class="md-sidebar__inner">
+                    
+
+<nav class="md-nav md-nav--secondary" aria-label="Table of contents">
+  
+  
+  
+    
+  
+  
+    <label class="md-nav__title" for="__toc">
+      <span class="md-nav__icon md-icon"></span>
+      Table of contents
+    </label>
+    <ul class="md-nav__list" data-md-component="toc" data-md-scrollfix>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreconfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.DraftWorkerConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        DraftWorkerConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.TargetWorkerConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TargetWorkerConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.OrchestratorConfig" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        OrchestratorConfig
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.config.load_config_file" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        load_config_file
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoretelemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        telemetry
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Stopwatch
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="Stopwatch">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_ms" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_ms
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_ns" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_ns
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.elapsed_s" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        elapsed_s
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.start" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        start
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.Stopwatch.stop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        stop
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetrySpan" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetrySpan
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetrySpan">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetrySpan.to_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_dict
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryEvent" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetryEvent
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetryEvent">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryEvent.to_dict" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        to_dict
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        TelemetryLogger
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="TelemetryLogger">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.events" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        events
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.spans" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        spans
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export_csv" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export_csv
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.export_prometheus" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        export_prometheus
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.record_event" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        record_event
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.record_span" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        record_span
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.reset" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        reset
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.TelemetryLogger.span" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        span
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.telemetry.get_current_context" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_current_context
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreverification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.verification
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verification
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="verification">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification--greedy-verification-algorithm" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        Greedy Verification Algorithm
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        VerificationResult
+      
+    </span>
+  </a>
+  
+    <nav class="md-nav" aria-label="VerificationResult">
+      <ul class="md-nav__list">
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult.acceptance_rate" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        acceptance_rate
+      
+    </span>
+  </a>
+  
+</li>
+        
+          <li class="md-nav__item">
+  <a href="#specsplit.core.verification.VerificationResult.num_accepted" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        num_accepted
+      
+    </span>
+  </a>
+  
+</li>
+        
+      </ul>
+    </nav>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.verify_greedy_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_greedy_tree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.verification.verify_stochastic_tree" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        verify_stochastic_tree
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoremodel_loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.model_loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        model_loading
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_checkpoint_dtype" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_checkpoint_dtype
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_model_config" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_config
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.model_loading.get_model_vocab_size" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        get_model_vocab_size
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcorecache_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.cache_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_utils
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.cache_to_legacy" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_to_legacy
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.cache_supports_crop" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        cache_supports_crop
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.crop_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        crop_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.batch_model_caches" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        batch_model_caches
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.slice_batch_item_from_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        slice_batch_item_from_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.cache_utils.legacy_to_dynamic_cache" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        legacy_to_dynamic_cache
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplitcoreserialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        specsplit.core.serialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        serialization
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.tensor_to_token_ids" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        tensor_to_token_ids
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.token_ids_to_tensor" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        token_ids_to_tensor
+      
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#specsplit.core.serialization.logits_to_probs" class="md-nav__link">
+    <span class="md-ellipsis">
+      
+        logits_to_probs
+      
+    </span>
+  </a>
+  
+</li>
+      
+    </ul>
+  
+</nav>
+                  </div>
+                </div>
+              </div>
+            
+          
+          
+            <div class="md-content" data-md-component="content">
+              
+              <article class="md-content__inner md-typeset">
+                
+                  
+
+
+  
+  
+
+
+<h1 id="core-modules">Core Modules</h1>
+<h2 id="specsplitcoreconfig"><code>specsplit.core.config</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.config"></a>
+    <div class="doc doc-contents first">
+
+        <p>Pydantic configuration models for SpecSplit services.</p>
+<p>All settings can be overridden via environment variables with the <code>SPECSPLIT_</code>
+prefix. For example, <code>SPECSPLIT_DRAFT_MODEL_NAME=gpt2</code> overrides the default
+draft model name.</p>
+<p>Settings can also be loaded from a YAML or JSON config file using
+:func:<code>load_config_file</code>. Priority (highest → lowest):
+    1. Constructor kwargs / CLI arguments
+    2. Environment variables (<code>SPECSPLIT_*</code> prefix)
+    3. Config file values
+    4. Field defaults</p>
+<p>Example YAML config file::</p>
+<pre><code>orchestrator:
+  draft_address: "localhost:50051"
+  target_address: "localhost:50052"
+  max_rounds: 50
+  max_output_tokens: 1024
+  tokenizer_model: "Qwen/Qwen2.5-7B-Instruct"
+draft:
+  model_name: "Qwen/Qwen2.5-0.5B-Instruct"
+  max_draft_tokens: 5
+target:
+  model_name: "Qwen/Qwen2.5-7B-Instruct"
+</code></pre>
+<p>Usage::</p>
+<pre><code>from specsplit.core.config import OrchestratorConfig, load_config_file
+
+file_cfg = load_config_file("config.yaml")
+cfg = OrchestratorConfig(**file_cfg.get("orchestrator", {}))
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.config.DraftWorkerConfig" class="doc doc-heading">
+            <code>DraftWorkerConfig</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="pydantic_settings.BaseSettings">BaseSettings</span></code></p>
+
+
+
+        <p>Configuration for the Draft Worker (small, fast LLM).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.config.TargetWorkerConfig" class="doc doc-heading">
+            <code>TargetWorkerConfig</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="pydantic_settings.BaseSettings">BaseSettings</span></code></p>
+
+
+
+        <p>Configuration for the Target Worker (large, accurate LLM).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.config.OrchestratorConfig" class="doc doc-heading">
+            <code>OrchestratorConfig</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+            <p class="doc doc-class-bases">
+              Bases: <code><span title="pydantic_settings.BaseSettings">BaseSettings</span></code></p>
+
+
+
+        <p>Configuration for the Orchestrator (pipeline coordinator).</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.config.load_config_file" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">load_config_file</span><span class="p">(</span><span class="n">path</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Load configuration from a YAML or JSON file.</p>
+<p>The file should contain top-level keys matching the service names:
+<code>orchestrator</code>, <code>draft</code>, and/or <code>target</code>.  Each key maps to a
+dict of field names → values.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>path</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Path to the config file (<code>.yaml</code>, <code>.yml</code>, or <code>.json</code>).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="typing.Any">Any</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A dict with keys <code>"orchestrator"</code>, <code>"draft"</code>, <code>"target"</code></p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="dict">dict</span>[<span title="str">str</span>, <span title="typing.Any">Any</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>(any or all may be absent if not specified in the file).</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="FileNotFoundError">FileNotFoundError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the file does not exist.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the file format is unsupported.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<pre><code>cfg = load_config_file("specsplit.yaml")
+orch = OrchestratorConfig(**cfg.get("orchestrator", {}))
+draft = DraftWorkerConfig(**cfg.get("draft", {}))
+</code></pre>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitcoretelemetry"><code>specsplit.core.telemetry</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.telemetry"></a>
+    <div class="doc doc-contents first">
+
+        <p>High-precision timing and structured telemetry logging for SpecSplit.</p>
+<p>Provides a <code>Stopwatch</code> for nanosecond-precision wall-clock measurement and
+a <code>TelemetryLogger</code> for emitting structured JSON spans that can be collected
+for distributed tracing and benchmarking.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.telemetry.Stopwatch" class="doc doc-heading">
+            <code>Stopwatch</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Nanosecond-precision wall-clock stopwatch with context-manager support.</p>
+<p>Usage::</p>
+<pre><code>sw = Stopwatch()
+sw.start()
+# ... do work ...
+sw.stop()
+print(f"Elapsed: {sw.elapsed_ms:.3f} ms")
+</code></pre>
+<p>Or as a context manager::</p>
+<pre><code>with Stopwatch() as sw:
+    # ... do work ...
+print(f"Elapsed: {sw.elapsed_ms:.3f} ms")
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.telemetry.Stopwatch.elapsed_ms" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">elapsed_ms</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Elapsed time in milliseconds.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.telemetry.Stopwatch.elapsed_ns" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">elapsed_ns</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Elapsed time in nanoseconds.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.telemetry.Stopwatch.elapsed_s" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">elapsed_s</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Elapsed time in seconds.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.Stopwatch.start" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">start</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Begin timing.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.Stopwatch.stop" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">stop</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Stop timing and record elapsed nanoseconds.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.telemetry.TelemetrySpan" class="doc doc-heading">
+            <code>TelemetrySpan</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>A single telemetry span representing a timed operation.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetrySpan.to_dict" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">to_dict</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Serialize the span to a dictionary.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.telemetry.TelemetryEvent" class="doc doc-heading">
+            <code>TelemetryEvent</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>A point-in-time event for reconstructing request/response timelines.</p>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryEvent.to_dict" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">to_dict</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Serialize the event to a dictionary.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.telemetry.TelemetryLogger" class="doc doc-heading">
+            <code>TelemetryLogger</code>
+
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Structured telemetry logger that collects spans and exports them as JSON.</p>
+<p>Each span is tagged with a unique <code>span_id</code> for distributed tracing.
+Collected spans can be exported to a JSON file for offline analysis.</p>
+<p>Usage::</p>
+<pre><code>tlog = TelemetryLogger(service_name="draft-worker")
+
+with tlog.span("generate_draft", tokens_processed=128) as span_id:
+    # ... do work ...
+    pass
+
+tlog.export("telemetry_output.json")
+</code></pre>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.events" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">events</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return a copy of all recorded events.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.spans" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">spans</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return a copy of all recorded spans.</p>
+
+    </div>
+
+</div>
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.export" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">export</span><span class="p">(</span><span class="n">path</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Export all recorded spans to a JSON file.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>path</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | <span title="pathlib.Path">Path</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Output file path. Parent directories are created if needed.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.export_csv" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">export_csv</span><span class="p">(</span><span class="n">path</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Export all recorded spans to a CSV file.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.export_prometheus" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">export_prometheus</span><span class="p">(</span><span class="n">path</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Export all recorded spans to a Prometheus text-based format.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.record_event" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">record_event</span><span class="p">(</span><span class="n">event_type</span><span class="p">,</span> <span class="o">**</span><span class="n">metadata</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Record a point-in-time event.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.record_span" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">record_span</span><span class="p">(</span><span class="n">span</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Record a completed span.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.reset" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">reset</span><span class="p">()</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Clear all recorded spans.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h3 id="specsplit.core.telemetry.TelemetryLogger.span" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">span</span><span class="p">(</span><span class="n">operation</span><span class="p">,</span> <span class="o">**</span><span class="n">metadata</span><span class="p">)</span></code>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Create a timed span context manager.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>operation</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Name of the operation being timed.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>**metadata</code>
+            </td>
+            <td>
+                  <code><span title="typing.Any">Any</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Arbitrary key-value pairs to attach to the span.</p>
+              </div>
+            </td>
+            <td>
+                  <code>{}</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="specsplit.core.telemetry._SpanContext">_SpanContext</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A context manager that records timing on exit.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.telemetry.get_current_context" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_current_context</span><span class="p">()</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the current telemetry span context, if any.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitcoreverification"><code>specsplit.core.verification</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.verification"></a>
+    <div class="doc doc-contents first">
+
+        <p>Verification Mathematics for Disaggregated Speculative Decoding.</p>
+<p>This module implements the core acceptance/rejection logic used by the
+Target Worker to validate draft token trees.  We start with <strong>strictly
+greedy</strong> decoding (temperature = 0.0) as a correctness baseline before
+moving to stochastic rejection sampling.</p>
+<h3 id="specsplit.core.verification--greedy-verification-algorithm">Greedy Verification Algorithm</h3>
+<p>Given:
+    - <code>draft_tokens[i]</code>: The token ID drafted at tree position <code>i</code>.
+    - <code>target_logits[i]</code>: The target model's logit vector at position <code>i</code>.
+    - <code>topology_map[i]</code>: The parent index of tree position <code>i</code>
+      (-1 for roots).</p>
+<p>For each position <code>i</code>, compute <code>argmax(target_logits[i])</code>.  A
+drafted token is <strong>accepted</strong> if it matches the target's greedy choice.</p>
+<p>The algorithm then walks the topology map to find the <strong>longest
+continuous path from a root to a leaf</strong> where every node along the
+path is accepted.  The "bonus token" is the target's greedy choice
+at the first divergence point (or at the accepted leaf, extending
+the sequence by one).</p>
+<p>This entire comparison is done on-device via <code>torch.argmax</code> and
+boolean indexing — no CPU↔GPU synchronization until the final small
+result extraction.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-class">
+
+
+
+<h2 id="specsplit.core.verification.VerificationResult" class="doc doc-heading">
+            <code>VerificationResult</code>
+
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-dataclass"><code>dataclass</code></small>
+  </span>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+
+
+        <p>Unified result for both greedy and stochastic tree verification.</p>
+
+
+<p><span class="doc-section-title">Attributes:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.accepted_leaf_index">accepted_leaf_index</span></code></td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The local tree-node index of the last
+accepted node on the longest accepted path.  If no tokens
+were accepted, this is <code>-1</code>.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.accepted_tokens">accepted_tokens</span></code></td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Ordered list of accepted token IDs along the
+longest accepted path (root → leaf).</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.bonus_token">bonus_token</span></code></td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The target model's greedy/sampled choice at the
+divergence point (i.e., the token that <em>would</em> follow the
+accepted prefix).  This is always produced — it extends the
+output by one token for free.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.accepted_indices">accepted_indices</span></code></td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>The local tree-node indices of the accepted
+nodes, in path order (root → leaf).  Useful for KV cache
+rollback and position tracking.</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.num_draft_tokens">num_draft_tokens</span></code></td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Total number of draft tokens in the tree
+(for computing acceptance rate).</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td><code><span title="specsplit.core.verification.VerificationResult.diverged">diverged</span></code></td>
+            <td>
+                  <code><span title="bool">bool</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Whether the path ended at a rejection point (True)
+or was fully accepted to a leaf node (False).  Used by
+the TargetEngine to correctly sample the bonus token from
+the right logit position.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.verification.VerificationResult.acceptance_rate" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">acceptance_rate</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Fraction of the tree that was accepted (0.0-1.0).</p>
+<p>Computed as <code>num_accepted / num_draft_tokens</code>.  Note that this
+measures the <em>path</em> acceptance, not the full tree utilization.</p>
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-attribute">
+
+
+
+<h3 id="specsplit.core.verification.VerificationResult.num_accepted" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">num_accepted</span></code>
+
+  <span class="doc doc-labels">
+      <small class="doc doc-label doc-label-property"><code>property</code></small>
+  </span>
+
+</h3>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Number of draft tokens accepted.</p>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.verification.verify_greedy_tree" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">verify_greedy_tree</span><span class="p">(</span><span class="n">draft_tokens</span><span class="p">,</span> <span class="n">target_logits</span><span class="p">,</span> <span class="n">topology_map</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Verify a draft token tree against target logits using greedy decoding.</p>
+<p>All comparisons are performed on-device.  The only CPU↔GPU sync
+happens at the very end when extracting the small result lists.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>draft_tokens</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Flat tensor of drafted token IDs.
+Shape: <code>[num_tree_nodes]</code>, dtype: <code>torch.long</code>.
+<code>draft_tokens[i]</code> is the token drafted at tree position <code>i</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>target_logits</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Target model's logit vectors at each tree position.
+Shape: <code>[num_tree_nodes, vocab_size]</code>, dtype: <code>torch.float*</code>.
+<code>target_logits[i]</code> corresponds to tree position <code>i</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>topology_map</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List of parent indices for each tree node.
+<code>topology_map[i] = j</code> means node <code>i</code>'s parent is <code>j</code>.
+<code>topology_map[i] = -1</code> means node <code>i</code> is a root.
+Length: <code>num_tree_nodes</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+<th>Name</th>          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+<td><code>A</code></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="VerificationResult
+
+
+  
+      dataclass
+   (specsplit.core.verification.VerificationResult)" href="#specsplit.core.verification.VerificationResult">VerificationResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>class:<code>VerificationResult</code> with the longest accepted path,</p>
+              </div>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+<td></td>            <td>
+                  <code><a class="autorefs autorefs-internal" title="VerificationResult
+
+
+  
+      dataclass
+   (specsplit.core.verification.VerificationResult)" href="#specsplit.core.verification.VerificationResult">VerificationResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>the bonus token, and metadata.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If tensor shapes are inconsistent with the topology map.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<pre><code>&gt;&gt;&gt; draft_tokens = torch.tensor([42, 17, 99, 8, 55])
+&gt;&gt;&gt; # Suppose target argmax at each position is [42, 17, 99, 7, 55]
+&gt;&gt;&gt; target_logits = torch.zeros(5, 100)
+&gt;&gt;&gt; target_logits[0, 42] = 10.0  # matches draft
+&gt;&gt;&gt; target_logits[1, 17] = 10.0  # matches draft
+&gt;&gt;&gt; target_logits[2, 99] = 10.0  # matches draft
+&gt;&gt;&gt; target_logits[3, 7]  = 10.0  # MISMATCH (draft=8, target=7)
+&gt;&gt;&gt; target_logits[4, 55] = 10.0  # matches but parent rejected
+&gt;&gt;&gt; topology_map = [-1, 0, 0, 1, 2]  # binary tree
+&gt;&gt;&gt; result = verify_greedy_tree(draft_tokens, target_logits, topology_map)
+&gt;&gt;&gt; result.accepted_tokens  # Longest: root(42) → left(17), stops at 8≠7
+[42, 17]
+&gt;&gt;&gt; result.bonus_token  # Target says 7 where draft said 8
+7
+</code></pre>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.verification.verify_stochastic_tree" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">verify_stochastic_tree</span><span class="p">(</span><span class="n">draft_tokens</span><span class="p">,</span> <span class="n">draft_probs</span><span class="p">,</span> <span class="n">target_probs</span><span class="p">,</span> <span class="n">topology_map</span><span class="p">,</span> <span class="n">draft_probs_full</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Perform stochastic verification with rejection sampling over the full tree.</p>
+<p>Explores all root-to-leaf paths via DFS. At each node, the draft token is
+accepted if p_target &gt;= p_draft, otherwise accepted with probability
+p_target / p_draft. The longest accepted path across all branches is chosen;
+the bonus (correction) token is sampled from the target distribution at the
+divergence node (rejection point) or at the accepted leaf.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>draft_tokens</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>[num_nodes] tensor of drafted token IDs.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>draft_probs</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>[num_nodes] tensor of probabilities the draft assigned to
+the drafted token at each node (legacy; used when draft_probs_full=None).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>target_probs</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>[num_nodes, vocab_size] tensor of target model probabilities.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>topology_map</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>List mapping node index to parent index (-1 for root).</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>draft_probs_full</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span> | None</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Optional [num_nodes, vocab_size] full draft distribution.
+When present, residual = max(0, P_target - P_draft) for correct sampling.</p>
+              </div>
+            </td>
+            <td>
+                  <code>None</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><a class="autorefs autorefs-internal" title="VerificationResult
+
+
+  
+      dataclass
+   (specsplit.core.verification.VerificationResult)" href="#specsplit.core.verification.VerificationResult">VerificationResult</a></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>VerificationResult with the longest accepted path and sampled bonus token.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If shapes are inconsistent or the tree has no root nodes.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitcoremodel_loading"><code>specsplit.core.model_loading</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.model_loading"></a>
+    <div class="doc doc-contents first">
+
+        <p>Helpers for loading local HuggingFace causal-LM checkpoints used by workers.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.model_loading.get_checkpoint_dtype" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_checkpoint_dtype</span><span class="p">(</span><span class="n">model_name</span><span class="p">,</span> <span class="o">*</span><span class="p">,</span> <span class="n">default</span><span class="o">=</span><span class="kc">None</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return the preferred compute dtype recorded in a local checkpoint.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.model_loading.get_model_config" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_model_config</span><span class="p">(</span><span class="n">model_or_config</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return a model config object from either a model or config.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.model_loading.get_model_vocab_size" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">get_model_vocab_size</span><span class="p">(</span><span class="n">model</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Best-effort vocabulary size for a loaded causal language model.</p>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitcorecache_utils"><code>specsplit.core.cache_utils</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.cache_utils"></a>
+    <div class="doc doc-contents first">
+
+        <p>Cache format conversion utilities for HuggingFace transformers compatibility.</p>
+<p>Provides version-agnostic helpers to convert between legacy tuple format and
+DynamicCache for causal language models used by SpecSplit.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.cache_to_legacy" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">cache_to_legacy</span><span class="p">(</span><span class="n">past_kv</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a cache object to a legacy <code>((k, v), ...)</code> tuple when possible.</p>
+<p>This supports legacy tuples and the newer <code>Cache</code> API via either
+<code>to_legacy_cache()</code> or <code>.layers</code>.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.cache_supports_crop" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">cache_supports_crop</span><span class="p">(</span><span class="n">past_kv</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Return True when the cache can be safely rolled back in-place.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.crop_cache" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">crop_cache</span><span class="p">(</span><span class="n">past_kv</span><span class="p">,</span> <span class="n">max_length</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Crop a cache to <code>max_length</code> tokens.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.batch_model_caches" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">batch_model_caches</span><span class="p">(</span><span class="n">caches</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Combine single-item caches into one batched cache for a forward pass.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.slice_batch_item_from_cache" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">slice_batch_item_from_cache</span><span class="p">(</span><span class="n">cache</span><span class="p">,</span> <span class="n">item_idx</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Extract one batch item from a batched cache object.</p>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.cache_utils.legacy_to_dynamic_cache" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">legacy_to_dynamic_cache</span><span class="p">(</span><span class="n">past_kv</span><span class="p">,</span> <span class="n">config</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert legacy (key, value) tuple cache to DynamicCache for model forward.</p>
+<p>Version-agnostic: tries from_legacy_cache first, then DynamicCache constructor,
+finally falls back to returning the legacy tuple (many models accept it).</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>past_kv</code>
+            </td>
+            <td>
+                  <code><span title="tuple">tuple</span>[<span title="tuple">tuple</span>[<span title="torch.Tensor">Tensor</span>, <span title="torch.Tensor">Tensor</span>], ...]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Legacy cache as tuple of (key, value) per layer.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>config</code>
+            </td>
+            <td>
+                  <code><span title="typing.Any">Any</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Model config (PreTrainedConfig) for DynamicCache.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="typing.Any">Any</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>DynamicCache instance or the original tuple if conversion fails.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div><h2 id="specsplitcoreserialization"><code>specsplit.core.serialization</code></h2>
+
+
+<div class="doc doc-object doc-module">
+
+
+
+<a id="specsplit.core.serialization"></a>
+    <div class="doc doc-contents first">
+
+        <p>Serialization utilities for converting between PyTorch tensors and Python lists.</p>
+<p>These helpers are used at the gRPC boundary to convert tensors into protobuf-
+compatible formats (lists of ints/floats) and back. All conversions are
+device-aware and preserve dtype where applicable.</p>
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-children">
+
+
+
+
+
+
+
+
+
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.serialization.tensor_to_token_ids" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">tensor_to_token_ids</span><span class="p">(</span><span class="n">tensor</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a 1-D tensor of token IDs to a plain Python list.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>tensor</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A 1-D <code>torch.LongTensor</code> (or compatible integer dtype)
+containing vocabulary indices.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A Python list of ints suitable for protobuf serialization.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If the tensor has more than one dimension.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<pre><code>&gt;&gt;&gt; ids = tensor_to_token_ids(torch.tensor([101, 2003, 1037]))
+&gt;&gt;&gt; ids
+[101, 2003, 1037]
+</code></pre>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.serialization.token_ids_to_tensor" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">token_ids_to_tensor</span><span class="p">(</span><span class="n">ids</span><span class="p">,</span> <span class="n">device</span><span class="o">=</span><span class="s1">&#39;cpu&#39;</span><span class="p">,</span> <span class="n">dtype</span><span class="o">=</span><span class="n">torch</span><span class="o">.</span><span class="n">long</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert a list of token IDs to a 1-D PyTorch tensor.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>ids</code>
+            </td>
+            <td>
+                  <code><span title="list">list</span>[<span title="int">int</span>]</code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A list of integer vocabulary indices.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>device</code>
+            </td>
+            <td>
+                  <code><span title="str">str</span> | <span title="torch.device">device</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Target device (<code>"cpu"</code>, <code>"cuda:0"</code>, etc.).</p>
+              </div>
+            </td>
+            <td>
+                  <code>&#39;cpu&#39;</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dtype</code>
+            </td>
+            <td>
+                  <code><span title="torch.dtype">dtype</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Desired tensor dtype. Defaults to <code>torch.long</code>.</p>
+              </div>
+            </td>
+            <td>
+                  <code><span title="torch.long">long</span></code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>A 1-D tensor on the specified device.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+        <p>Example::</p>
+<pre><code>&gt;&gt;&gt; t = token_ids_to_tensor([101, 2003, 1037], device="cpu")
+&gt;&gt;&gt; t.shape
+torch.Size([3])
+</code></pre>
+
+
+    </div>
+
+</div>
+
+<div class="doc doc-object doc-function">
+
+
+<h2 id="specsplit.core.serialization.logits_to_probs" class="doc doc-heading">
+            <code class="highlight language-python"><span class="n">logits_to_probs</span><span class="p">(</span><span class="n">logits</span><span class="p">,</span> <span class="n">temperature</span><span class="o">=</span><span class="mf">1.0</span><span class="p">,</span> <span class="n">dim</span><span class="o">=-</span><span class="mi">1</span><span class="p">)</span></code>
+
+</h2>
+
+
+    <div class="doc doc-contents ">
+
+        <p>Convert raw logits to a probability distribution via softmax.</p>
+<p>Applies temperature scaling before softmax. A temperature of 0 is treated
+as greedy (argmax), returning a one-hot distribution.</p>
+
+
+<p><span class="doc-section-title">Parameters:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Name</th>
+          <th>Type</th>
+          <th>Description</th>
+          <th>Default</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                <code>logits</code>
+            </td>
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Raw logits from a language model, shape <code>(..., vocab_size)</code>.</p>
+              </div>
+            </td>
+            <td>
+                <em>required</em>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>temperature</code>
+            </td>
+            <td>
+                  <code><span title="float">float</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Sampling temperature. Values &lt; 1.0 sharpen the
+distribution; values &gt; 1.0 flatten it.</p>
+              </div>
+            </td>
+            <td>
+                  <code>1.0</code>
+            </td>
+          </tr>
+          <tr class="doc-section-item">
+            <td>
+                <code>dim</code>
+            </td>
+            <td>
+                  <code><span title="int">int</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Dimension along which to apply softmax.</p>
+              </div>
+            </td>
+            <td>
+                  <code>-1</code>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    <p><span class="doc-section-title">Returns:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="torch.Tensor">Tensor</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>Probability tensor of the same shape as <em>logits</em>.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+<p><span class="doc-section-title">Raises:</span></p>
+    <table>
+      <thead>
+        <tr>
+          <th>Type</th>
+          <th>Description</th>
+        </tr>
+      </thead>
+      <tbody>
+          <tr class="doc-section-item">
+            <td>
+                  <code><span title="ValueError">ValueError</span></code>
+            </td>
+            <td>
+              <div class="doc-md-description">
+                <p>If temperature is negative.</p>
+              </div>
+            </td>
+          </tr>
+      </tbody>
+    </table>
+
+
+    </div>
+
+</div>
+
+
+
+  </div>
+
+    </div>
+
+</div>
+
+
+
+
+
+
+
+
+
+
+
+
+                
+              </article>
+            </div>
+          
+          
+<script>var target=document.getElementById(location.hash.slice(1));target&&target.name&&(target.checked=target.name.startsWith("__tabbed_"))</script>
+        </div>
+        
+      </main>
+      
+        <footer class="md-footer">
+  
+  <div class="md-footer-meta md-typeset">
+    <div class="md-footer-meta__inner md-grid">
+      <div class="md-copyright">
+  
+  
+    Made with
+    <a href="https://squidfunk.github.io/mkdocs-material/" target="_blank" rel="noopener">
+      Material for MkDocs
+    </a>
+  
+</div>
+      
+    </div>
+  </div>
+</footer>
+      
+    </div>
+    <div class="md-dialog" data-md-component="dialog">
+      <div class="md-dialog__inner md-typeset"></div>
+    </div>
+    
+    
+    
+      
+      
+      <script id="__config" type="application/json">{"annotate": null, "base": "../..", "features": ["content.code.copy", "navigation.sections"], "search": "../../assets/javascripts/workers/search.2c215733.min.js", "tags": null, "translations": {"clipboard.copied": "Copied to clipboard", "clipboard.copy": "Copy to clipboard", "search.result.more.one": "1 more on this page", "search.result.more.other": "# more on this page", "search.result.none": "No matching documents", "search.result.one": "1 matching document", "search.result.other": "# matching documents", "search.result.placeholder": "Type to start searching", "search.result.term.missing": "Missing", "select.version": "Select version"}, "version": null}</script>
+    
+    
+      <script src="../../assets/javascripts/bundle.79ae519e.min.js"></script>
+      
+    
+  </body>
+</html>
